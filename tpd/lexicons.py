@@ -43,6 +43,25 @@ GENERIC_RE = re.compile(r"\b(" + "|".join(GENERIC_PATTERNS) + r")\b", re.I)
 # Document-class cues
 # --------------------------------------------------------------------------- #
 
+# Words indicating a prose policy.
+POLICY_CUES_RE = re.compile(
+    r"privacy (?:policy|notice|statement)|personal (?:data|information)|"
+    r"data (?:protection|processing|controller|subject)|"
+    # "we [may/will/also/do] collect/share/use/disclose/process/sell ..."
+    r"we(?:\s+\w+){0,2}\s+(?:collect|shar\w+|use|disclos\w+|process|sell)\b|"
+    r"third part(?:y|ies)|your (?:rights|choices|personal)|opt[- ]?out|gdpr|ccpa|"
+    r"cookies?|consent|service providers?|how we (?:use|share|collect)|"
+    r"information (?:we|you) (?:collect|share|provide)",
+    re.I,
+)
+
+# Words indicating ToS/ToU/EULA/etc..
+TOS_TITLE_RE = re.compile(
+    r"\b(terms (?:of (?:service|use)|and conditions)|terms ?& ?conditions|"
+    r"end[- ]user license|eula|acceptable use|conditions of use)\b",
+    re.I,
+)
+
 # Words indicating a title for a subprocessor table.
 SUBPROCESSOR_TITLE_RE = re.compile(
     r"\b(sub[- ]?processors?|sub[- ]?processor list|list of sub[- ]?processors|"
@@ -70,6 +89,16 @@ COOKIE_TITLE_RE = re.compile(
     r"\b(cookie (?:policy|notice|statement|preferences|settings|list)|"
     r"cookies?|consent (?:preferences|manager)|your privacy choices|"
     r"do not sell|vendor list|advertising partners)\b",
+    re.I,
+)
+
+# Heading that frames the page as a list of third parties / vendors
+# / sub-processors / data controllers.
+VENDOR_LIST_TITLE_RE = re.compile(
+    r"\b(?:list of|the (?:major |following )?)"
+    r"[\w ,&/-]{0,40}?"
+    r"(third[- ]?part(?:y|ies)|sub[- ]?processors?|vendors?|"
+    r"data (?:controllers?|processors?|recipients?)|recipients?)\b",
     re.I,
 )
 
