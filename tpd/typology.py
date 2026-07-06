@@ -1,0 +1,52 @@
+"""Machine-readable typology of third-party disclosure patterns."""
+
+from __future__ import annotations
+
+from enum import Enum
+
+class TargetType(str, Enum):
+    """The kind of target whose document set we analyse."""
+
+    WEBSITE = "website"
+    DATA_BROKER = "data_broker"
+    PLAY_STORE_APP = "play_store_app"
+    APP_STORE_APP = "app_store_app"
+
+
+# --------------------------------------------------------------------------- #
+# Disclosure facets
+# --------------------------------------------------------------------------- #
+class Medium(str, Enum):
+    """The level of document structuredness."""
+
+    PROSE = "prose"                        # narrative policy text
+    STRUCTURED = "structured"              # human-readable table / structured list
+    MACHINE_READABLE = "machine_readable"  # standardised machine-readable file
+    OTHER_DOC = "other_doc"                # any other relevant doc (partners/help/FAQ)
+
+
+class Specificity(str, Enum):
+    """The level of specificity by which third parties are disclosed."""
+
+    NAMED = "named"        # a specific organisation
+    CATEGORY = "category"  # a role / category only ("advertising partners")
+    GENERIC = "generic"    # a bare unnamed reference ("third parties")
+
+
+# --------------------------------------------------------------------------- #
+# A facet is a single (Medium, Specificity) pair, encoded as "medium:specificity".
+# A facet set is a ``;``-joined list of facets.
+# --------------------------------------------------------------------------- #
+def facet_code(medium: Medium, specificity: Specificity) -> str:
+    """Produce a facet given a medium and specificity."""
+    return f"{medium.value}:{specificity.value}"
+
+
+def parse_facet(code: str) -> tuple[Medium, Specificity]:
+    """Produce a medium and specificity given a facet. Raises ``ValueError`` on a malformed code."""
+    m, _, s = code.partition(":")
+    return Medium(m), Specificity(s)
+
+
+_VALID_MEDIA = {m.value for m in Medium}
+_VALID_SPEC = {s.value for s in Specificity}
