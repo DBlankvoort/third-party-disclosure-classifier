@@ -168,3 +168,21 @@ CMP_FINGERPRINTS = [
     r"vendor[_\- ]?list", r"vendors? we work with",
 ]
 CMP_RE = re.compile("|".join(CMP_FINGERPRINTS), re.I)
+
+# --------------------------------------------------------------------------- #
+# Discover companion docs.
+# --------------------------------------------------------------------------- #
+LINK_DISCOVERY = [
+    ("privacy_policy", re.compile(r"privacy(?:[-_ ]?(?:policy|notice|statement|center))?", re.I)),
+    ("subprocessor_list", re.compile(r"sub[-_ ]?processor", re.I)),
+    ("dpa", re.compile(r"\b(dpa|data processing (?:agreement|addendum))\b", re.I)),
+    ("cookie_policy", re.compile(r"cookie[-_ ]?(?:policy|notice|statement|preferences|settings)", re.I)),
+    ("vendor_list", re.compile(
+        r"\bvendors?[-_ ]?lists?\b|advertising partners|ad partners|"
+        r"third[-_ ]?part(?:y|ies)[-_ ]?data|"  # privacy-centre "third-party-data" pages
+        r"categories of (?:third[- ]?part(?:y|ies)|recipients)|"
+        r"(?:who|companies|parties) we share", re.I)),
+    ("do_not_sell", re.compile(r"do[-_ ]?not[-_ ]?sell|your privacy choices|opt[-_ ]?out", re.I)),
+    ("partners_page", re.compile(r"\b(our partners|partner directory|integrations?|app directory)\b", re.I)),
+    ("help_doc", re.compile(r"\b(help|support|faq|knowledge ?base)\b", re.I)),
+]
