@@ -55,8 +55,23 @@ class CollectedDoc:
         return self.http_status == 200 and bool(self.raw_path) and not self.error
 
 
+@dataclass
+class FetchResult:
+    url: str
+    status: int
+    content_type: str
+    text: str
+    error: str = ""
+    final_url: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status == 200 and not self.error
 
 
+# --------------------------------------------------------------------------- #
+# Corpus
+# --------------------------------------------------------------------------- #
 class Corpus:
     """Store of collected document sets from targets on the file system."""
 
@@ -110,3 +125,56 @@ class Corpus:
             p.name for p in self.root.iterdir()
             if p.is_dir() and p.name != "_cache" and (p / "manifest.json").exists()
         )
+
+# --------------------------------------------------------------------------- #
+# Fetch
+# --------------------------------------------------------------------------- #
+def _cache_key(url: str) -> str:
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()
+
+
+def fetch(
+    url: str,
+    cache_dir: Path | None = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    force: bool = False,
+    delay: float = 0.0,
+) -> FetchResult:
+    """GET ``url``"""
+    cache_file = None
+    if cache_dir is not None:
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"{_cache_key(url)}.json"
+        if cache_file.exists() and not force:
+            try:
+                d = json.loads(cache_file.read_text(encoding="utf-8"))
+                return FetchResult(**d)
+            except Exception:  # noqa: BLE001
+                pass
+
+    if delay:
+        time.sleep(delay)
+    try:
+        resp = _SESSION.get(url, timeout=timeout, allow_redirects=True)
+        ctype = resp.headers.get("Content-Type", "")
+        # Keep HTML/text and JSON.
+        text = resp.text if (
+            "html" in ctype or "text" in ctype or "json" in ctype or not ctype
+        ) else ""
+        result = FetchResult(
+            url=url,
+            status=resp.status_code,
+            content_type=ctype,
+            text=text,
+            final_url=resp.url,
+        )
+    except Exception as exc:  # noqa: BLE001
+        result = FetchResult(url=url, status=0, content_type="", text="", error=str(exc))
+
+    if cache_file is not None:
+        try:
+            cache_file.write_text(json.dumps(asdict(result)), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+    return result

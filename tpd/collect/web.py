@@ -33,7 +33,6 @@ COMMON_COMPANION_PATHS = [
                      "/privacy-centre/third-party-data", "/vendor-list", "/vendors",
                      "/legal/vendors", "/third-parties", "/who-we-share-data-with"]),
 ]
-MAX_COMPANION_DOCS = 12
 # Companion roles we keep (a discovered link's suggested role).
 _COMPANION_ROLES = {
     "subprocessor_list", "dpa", "cookie_policy", "vendor_list",
@@ -56,20 +55,18 @@ def _same_site(url: str, *base_hosts: str) -> bool:
     return any(reg == _registrable(h) for h in base_hosts if h)
 
 
-def _discover_links(doc_html: str, base_url: str) -> dict[str, str]:
+def _discover_links(doc_html: str, base_url: str) -> dict[str, list[str]]:
     """Return {role: absolute_url} for companion docs discovered in ``doc_html``."""
     parsed = parse_html(doc_html)
-    found: dict[str, str] = {}
+    found: dict[str, list[str]] = {}
     for text, href in parsed.links:
         if href.startswith(("javascript:", "mailto:", "#")):
             continue
         absu = urljoin(base_url, href)
         hay = f"{text} {href}"
         for role, pat in lexicons.LINK_DISCOVERY:
-            if role in found:
-                continue
             if pat.search(hay):
-                found[role] = absu
+                found[role].append(absu)
     return found
 
 
@@ -111,7 +108,7 @@ def collect_website(
 
     # 1. homepage ----------------------------------------------------------- #
     home_res = fetch(home, cache_dir=cache, force=force, delay=delay) if home else None
-    discovered: dict[str, str] = {}
+    discovered: dict[str, list[str]] = {}
     if home_res and home_res.ok and home_res.text:
         discovered = _discover_links(home_res.text, home_res.final_url or home)
 
@@ -132,24 +129,24 @@ def collect_website(
     if policy_doc is not None:
         policy_host = urlparse(policy_doc.url).netloc
         policy_html = corpus.read_doc_html(policy_doc)
-        for role, url in _discover_links(policy_html, policy_doc.url).items():
-            discovered.setdefault(role, url)
+        for role, urls in _discover_links(policy_html, policy_doc.url).items():
+            for url in urls:
+                discovered.setdefault(role, url)
 
     # 4. fetch discovered companion docs ------------------------------------ #
     seen_urls = {d.url for d in docs}
     seen_roles = {d.role for d in docs}
-    n = 0
-    for role, url in discovered.items():
-        if role == "privacy_policy" or role not in _COMPANION_ROLES:
-            continue
-        if n >= max_companions or url in seen_urls:
-            continue
-        if not _same_site(url, base_host, policy_host):
-            continue
-        _save(url, role, dedup=True)
-        seen_urls.add(url)
-        seen_roles.add(role)
-        n += 1
+    for role, urls in discovered.items():
+        for url in urls:
+            if role == "privacy_policy" or role not in _COMPANION_ROLES:
+                continue
+            if url in seen_urls:
+                continue
+            if not _same_site(url, base_host, policy_host):
+                continue
+            _save(url, role, dedup=True)
+            seen_urls.add(url)
+            seen_roles.add(role)
 
     # 5. try conventional companion paths for high-value surfaces not yet found.
     roots = []
