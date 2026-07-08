@@ -21,7 +21,7 @@ from .collect.runner import (
 from .evaluate import (
     goal2_relevance,
     goal3_agreement,
-    goal4_latency,
+    latency,
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
@@ -109,3 +109,136 @@ def augment(corpus_root, workers, delay, force, include_unusable) -> None:
                            workers=workers, progress=_progress)
     n_docs = sum(len(v) for v in added.values())
     click.echo(f"added {n_docs} registry document(s) across {len(added)} target(s)")
+
+
+# --------------------------------------------------------------------------- #
+@cli.command()
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--out", "out_dir", default=None, help="write per-doc/per-target CSV here")
+@click.option("--no-ner", is_flag=True, help="disable NER")
+@click.option("--polisis", is_flag=True, help="use the POLISIS cache if present")
+@click.option("--workers", type=int, default=8, show_default=True,
+              help="classify documents in parallel. Ignored with --polisis")
+@click.option("--include-unusable", is_flag=True,
+              help="classify every attempted target")
+@click.option("--quiet", is_flag=True, help="suppress per-target lines")
+def classify(corpus_root, out_dir, no_ner, polisis, workers, include_unusable, quiet) -> None:
+    """Run relevance + faceted typology classifiers over a corpus."""
+    corpus = Corpus(corpus_root)
+    backend = None
+    if polisis:
+        from .classify.polisis_connector import load_cache
+
+        backend = load_cache(corpus_root)
+        click.echo(f"polisis backend: {'loaded' if backend else 'not available'}")
+
+    ids = _eval_ids(corpus, include_unusable)
+    if ids is not None:
+        click.echo(f"classifying {len(ids)} usable targets "
+                   f"(of {len(corpus.list_targets())} attempted)")
+    result = classify_corpus(corpus, use_ner=not no_ner, backend=backend, target_ids=ids,
+                             workers=workers)
+    if not quiet:
+        for tc in result.targets:
+            click.echo(
+                f"  {tc.target_id:42s} class=[{tc.typology_class}] "
+                f"relevant_docs={tc.relevant_docs} classified={int(tc.classified)}"
+            )
+    _print_distribution(result)
+    click.echo("\n" + latency(result).summary)
+
+    if out_dir:
+        _write_outputs(result, out_dir)
+        click.echo(f"wrote per-doc + per-target CSVs to {out_dir}")
+
+
+def _print_distribution(result) -> None:
+    media = Counter()
+    facets = Counter()
+    classes = Counter()
+    covered = 0
+    for tc in result.targets:
+        covered += int(tc.classified)
+        classes[tc.typology_class or "(none)"] += 1
+        for f in tc.facets:
+            facets[f] += 1
+            media[f.split(":")[0]] += 1
+    n = len(result.targets)
+    click.echo(f"\ncoverage: {covered}/{n} classified")
+    click.echo("medium frequency (targets):  " +
+               ", ".join(f"{m}={c}" for m, c in media.most_common()))
+    click.echo("facet frequency (targets):   " +
+               ", ".join(f"{f}={c}" for f, c in facets.most_common()))
+    click.echo("most common typology classes:")
+    for cls, c in classes.most_common(8):
+        click.echo(f"    {c:4d}  {cls}")
+
+def _write_outputs(result, out_dir: str) -> None:
+    import csv
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / "documents.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["target_id", "target_type", "doc_id", "role", "url", "medium",
+                    "relevant", "facets", "named_orgs", "org_typing", "category_terms",
+                    "doc_class_reason", "structural_fired", "needs_review", "review_reason"])
+        for tc in result.targets:
+            for d in tc.docs:
+                w.writerow([tc.target_id, tc.target_type, d.doc_id, d.role, d.url, d.medium,
+                            int(d.relevant), ";".join(d.facets), ";".join(d.named_orgs),
+                            d.org_typing, ";".join(d.category_terms), d.doc_class_reason,
+                            ";".join(d.structural_fired), int(d.needs_review), d.review_reason])
+    with open(out / "targets.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["target_id", "target_type", "relevant_docs", "typology_class",
+                    "facets", "classified"])
+        for tc in result.targets:
+            w.writerow([tc.target_id, tc.target_type, tc.relevant_docs,
+                        tc.typology_class, ";".join(tc.facets), int(tc.classified)])
+    (out / "summary.json").write_text(json.dumps({
+        "n_targets": len(result.targets),
+        "classified": sum(1 for tc in result.targets if tc.classified),
+    }, indent=2), encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+@cli.command()
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--out", "out_dir", required=True, help="directory for labelling sheets")
+@click.option("--no-ner", is_flag=True)
+@click.option("--workers", type=int, default=8, show_default=True,
+              help="documents classified in parallel per target")
+@click.option("--include-unusable", is_flag=True)
+@click.option("--order-seed", type=int, default=None,
+              help="seed for random target ordering")
+@click.option("--merge-gold-from", "merge_dir", default=None,
+              help="existing dir to merge gold labels from.")
+def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, merge_dir) -> None:
+    """Emit pre-filled hand-labelling sheets"""
+    from .evaluate.labeling import DEFAULT_ORDER_SEED
+
+    seed = DEFAULT_ORDER_SEED if order_seed is None else order_seed
+    corpus = Corpus(corpus_root)
+    result = classify_corpus(corpus, use_ner=not no_ner, workers=workers,
+                             target_ids=_eval_ids(corpus, include_unusable))
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    rel = Path(out_dir) / "relevance_labels.csv"
+    typ = Path(out_dir) / "typology_labels.csv"
+    prior_rel = Path(merge_dir) / "relevance_labels.csv" if merge_dir else None
+    prior_typ = Path(merge_dir) / "typology_labels.csv" if merge_dir else None
+    if prior_rel and not prior_rel.exists():
+        prior_rel = None
+    if prior_typ and not prior_typ.exists():
+        prior_typ = None
+    n1 = write_relevance_sheet(result, rel, order_seed=seed, prior_path=prior_rel)
+    n2 = write_typology_sheet(result, typ, order_seed=seed, prior_path=prior_typ)
+    click.echo(f"wrote {n1} relevance rows -> {rel} (random target order, seed={seed})")
+    click.echo(f"wrote {n2} typology rows  -> {typ} (random target order, seed={seed})")
+    if merge_dir:
+        click.echo(f"carried over hand labels + order from {merge_dir}; "
+                   "fill the new blank rows, then `python -m tpd eval`.")
+    else:
+        click.echo("Label the first ~50 targets by label_order, fill gold_*, then "
+                   "`python -m tpd eval`.")
+
