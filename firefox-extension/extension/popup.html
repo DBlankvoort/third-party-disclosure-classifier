@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="popup.css" />
+  <title>Disclosure Lens</title>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>Third-Party Disclosure Lens</h1>
+        <p id="origin" class="origin">—</p>
+      </div>
+    </div>
+    <button id="rescan" class="rescan" title="Re-crawl (ignore cache)" hidden>↻</button>
+  </header>
+
+  <main>
+    <!-- Status / errors -->
+    <section id="status" class="status">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="status-text">Analyzing…</p>
+    </section>
+
+    <!-- Result -->
+    <section id="result" hidden>
+      <!-- Headline -->
+      <div id="headline" class="headline">
+        <span id="class-pill" class="pill">—</span>
+        <span id="source-pill" class="pill subtle"></span>
+      </div>
+
+      <!-- (1) WHERE -->
+      <h2 class="section-title">Where disclosures were found</h2>
+      <ul id="docs" class="docs"></ul>
+      <p id="docs-empty" class="empty" hidden>
+        No recognised disclosure document was found at this origin.
+      </p>
+
+      <!-- (2) WHAT, in aggregate -->
+      <h2 class="section-title">What they disclose, in aggregate</h2>
+      <div class="matrix-wrap">
+        <table id="matrix" class="matrix" aria-label="Disclosure medium by specificity">
+          <thead>
+            <tr>
+              <th class="corner"></th>
+              <th>named</th><th>category</th><th>generic</th>
+            </tr>
+          </thead>
+          <tbody><!-- rows injected per medium --></tbody>
+        </table>
+      </div>
+
+      <details id="orgs-box" class="rollup">
+        <summary>Named organisations <span id="orgs-count" class="count">0</span></summary>
+        <div id="orgs" class="taglist"></div>
+      </details>
+      <details id="cats-box" class="rollup">
+        <summary>Role / categories disclosed <span id="cats-count" class="count">0</span></summary>
+        <div id="cats" class="taglist"></div>
+      </details>
+    </section>
+
+    <!-- Server-not-running help -->
+    <section id="offline" class="offline" hidden>
+      <p><strong>Local analyzer not reachable.</strong></p>
+      <p>Start the bridge, then re-open this popup:</p>
+      <pre>cd firefox-extension
+python server/server.py</pre>
+    </section>
+  </main>
+
+  <footer>
+    <span class="legend"><i class="dot on"></i> discloses third parties</span>
+    <span class="legend"><i class="dot"></i> recognised, none found</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

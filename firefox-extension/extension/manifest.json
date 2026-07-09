@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "Third-Party Disclosure Lens",
+  "version": "0.1.0",
+  "description": "Shows where a site discloses third-party data sharing and what those documents disclose, in aggregate — powered by the local tpd typology tool.",
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "http://127.0.0.1:8765/*"
+  ],
+  "browser_action": {
+    "default_title": "Analyze third-party disclosures",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tpd-disclosure-lens@summer-project",
+      "strict_min_version": "109.0"
+    }
+  }
+}
