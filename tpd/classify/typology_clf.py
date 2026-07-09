@@ -76,11 +76,11 @@ def classify_document(
         # Not a recognisable disclosure document.
         if backend is not None:
             try:
-                if backend.is_third_party_sharing(doc):
-                    out.relevant = True
-                    out.needs_review = True
-                    out.review_reason = "backend_relevant_no_medium"
+                if backend.has_verdict(doc):
+                    out.relevant = backend.is_third_party_sharing(doc)
+                    out.decisive = True
                     out.evidence = "polisis_backend"
+                    return out
             except Exception:  # noqa: BLE001
                 pass
         out.decisive = False
@@ -104,11 +104,10 @@ def classify_document(
     # Medium but no disclosure found.
     if doc_class.medium in (Medium.PROSE, Medium.OTHER_DOC) and not facets and backend is not None:
         try:
-            if backend.is_third_party_sharing(doc):
-                # Flag for review.
-                out.relevant = True
-                out.needs_review = True
-                out.review_reason = "backend_relevant_no_facet"
+            if backend.has_verdict(doc):
+                out.relevant = backend.is_third_party_sharing(doc)
+                out.decisive = True
+                out.evidence = "polisis_backend"
         except Exception:  # noqa: BLE001
             pass
     return out

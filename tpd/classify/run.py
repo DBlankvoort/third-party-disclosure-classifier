@@ -115,7 +115,7 @@ def classify_corpus(
                     parsed.append((doc, d.role, d.doc_id, d.url))
                     result.doc_seconds.append(time.perf_counter() - d0)
                 tc = classify_target(
-                    target.type, parsed, target_id=tid, ner_fn=ner_fn, cache=cache,
+                    target.type, parsed, target_id=tid, ner_fn=ner_fn, backend=cache,
                     first_party=first_party,
                 )
 

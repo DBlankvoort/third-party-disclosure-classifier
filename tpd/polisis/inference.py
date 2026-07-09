@@ -7,11 +7,11 @@ from typing import Dict, List, Optional
 
 import torch
 
-from polisis.attributes import ATTRIBUTE_ORDER, ATTRIBUTES, model_dirname
+from .attributes import ATTRIBUTE_ORDER, ATTRIBUTES, model_dirname
 
 THRESHOLD = 0.5
 MAX_LEN = 512
-DEFAULT_MODELS_ROOT = Path(__file__).resolve().parent.parent / "models"
+DEFAULT_MODELS_ROOT = Path(__file__).resolve().parent.parent.parent / "models"
 
 
 class _AttributeClassifier:

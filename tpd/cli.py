@@ -253,14 +253,13 @@ def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
 # --------------------------------------------------------------------------- #
 @cli.command(name="polisis-cache")
 @click.option("--corpus", "corpus_root", required=True)
-@click.option("--polisis-root", default=None, help="path to polisis-reimplement")
-def polisis_cache(corpus_root, polisis_root) -> None:
-    """Build the POLISIS cache."""
-    from .classify.polisis_connector import DEFAULT_POLISIS_ROOT, build_cache
+@click.option("--models-root", default=None, help="path to POLISIS models")
+def polisis_cache(corpus_root, models_root) -> None:
+    """Build the POLISIS cache over every usable document in the corpus."""
+    from .classify.polisis_connector import build_cache
 
-    root = polisis_root or DEFAULT_POLISIS_ROOT
-    click.echo(f"running POLISIS over corpus prose docs (root={root}) ...")
-    path = build_cache(corpus_root, polisis_root=root)
+    click.echo("running POLISIS over the full corpus doc set ...")
+    path = build_cache(corpus_root, models_root=models_root)
     click.echo(f"wrote verdict cache -> {path}")
 
 
