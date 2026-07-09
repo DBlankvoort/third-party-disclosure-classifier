@@ -66,7 +66,10 @@ def _discover_links(doc_html: str, base_url: str) -> dict[str, list[str]]:
         hay = f"{text} {href}"
         for role, pat in lexicons.LINK_DISCOVERY:
             if pat.search(hay):
-                found[role].append(absu)
+                if role in found:
+                    found[role].append(absu)
+                else:
+                    found[role] = [absu]
     return found
 
 
@@ -162,7 +165,6 @@ def collect_website(
                 got = _save(cand, role, dedup=True)
                 seen_urls.add(cand)
                 if got is not None:
-                    n += 1
                     done = True
                     break
             if done:

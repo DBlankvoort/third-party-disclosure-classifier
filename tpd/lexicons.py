@@ -40,6 +40,28 @@ GENERIC_PATTERNS = [
 GENERIC_RE = re.compile(r"\b(" + "|".join(GENERIC_PATTERNS) + r")\b", re.I)
 
 # --------------------------------------------------------------------------- #
+# Sharing/collecting cues
+# --------------------------------------------------------------------------- #
+SHARING_VERBS = [
+    r"shar(?:e|es|ed|ing)", r"disclos(?:e|es|ed|ure|ing)",
+    r"sell(?:s|ing)?", r"sold", r"rent(?:s|ed|ing)?",
+    r"provid(?:e|es|ed|ing)\s+(?:to|with)", r"transfer(?:s|red|ring)?",
+    r"mak(?:e|es|ing)\s+available", r"give\s+access", r"allow\s+access",
+    r"(?:we|us|our|they)\s+(?:also\s+)?work\s+with", r"partner\s+with",
+]
+SHARING_RE = re.compile(r"\b(" + "|".join(SHARING_VERBS) + r")\b", re.I)
+
+COLLECTION_VERBS = [
+    r"collect(?:s|ed|ing)?", r"track(?:s|ed|ing)?", r"gather(?:s|ed|ing)?",
+    r"obtain(?:s|ed|ing)?", r"receiv(?:e|es|ed|ing)",
+    r"serv(?:e|es|ed|ing)\s+(?:ads|advertis\w+)",
+    r"plac(?:e|es|ed|ing)\s+cookies", r"set(?:s|ting)?\s+cookies",
+    r"us(?:e|es|ed|ing)\s+(?:cookies|pixels?|web\s+beacons?|sdks?|"
+    r"(?:tracking\s+|similar\s+)?technolog\w+)",
+]
+COLLECTION_RE = re.compile(r"\b(" + "|".join(COLLECTION_VERBS) + r")\b", re.I)
+
+# --------------------------------------------------------------------------- #
 # Inline naming cues
 # --------------------------------------------------------------------------- #
 EXEMPLIFIER_RE = re.compile(
@@ -270,7 +292,44 @@ LINK_DISCOVERY = [
 # --------------------------------------------------------------------------- #
 # Clause detection
 # --------------------------------------------------------------------------- #
+
+# First-party hints
+_FP_ANCHOR_RE = re.compile(
+    r"\b(?:we|our|us)\b|\b(?:this|the)\s+(?:sites?|websites?|apps?|applications?|services?|pages?)\b",
+    re.I,
+)
+
+# Data-related nouns
+_DATA_NOUN_RE = re.compile(
+    r"\b(?:data|information|cookies?|identifiers?|personal|browsing|usage|"
+    r"analytics|pixels?|beacons?|trackers?|tracking)\b",
+    re.I,
+)
+
+# Sentence boundaries
 _SENT_BOUND_RE = re.compile(r"(?<=[a-z]{2})[.!?]\s")
+
+# Negation cues
+NEGATION_RE = re.compile(
+    r"\b(not|never|n't|without|neither|nor|no longer|refrain from|"
+    r"decline to|do not|does not|will not|cannot|won't|don't|doesn't)\b",
+    re.I,
+)
+
+# How far back to look for a negator
+_NEG_WINDOW = 45
+
+# Exception cues
+EXCEPTION_RE = re.compile(
+    r"\b(unless|except|other than|save (?:as|where|for|that|to the extent)|"
+    r"with the exception of|aside from|apart from)\b",
+    re.I,
+)
+
+# How far forward to look for an exception
+_EXC_WINDOW = 140
+
+_SELF_RECIPIENT_RE = re.compile(r"^\s*(?:(?:to|with)\s+)?(?:you|us)\b", re.I)
 
 
 # --------------------------------------------------------------------------- #

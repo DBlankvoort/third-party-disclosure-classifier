@@ -127,6 +127,13 @@ def usable_target_ids(corpus: Corpus) -> list[str]:
     return ids
 
 
+def group_by_type(seeds: list[Target]) -> "OrderedDict[str, list[Target]]":
+    groups: OrderedDict[str, list[Target]] = OrderedDict()
+    for t in seeds:
+        groups.setdefault(t.type, []).append(t)
+    return groups
+
+
 def collect_stratified(
     seeds: list[Target],
     corpus: Corpus,
@@ -143,12 +150,11 @@ def collect_stratified(
     out: dict[str, list[CollectedDoc]] = {}
 
     def _safe(t: Target) -> tuple[Target, list[CollectedDoc]]:
-        try:
-            return t, collect_target(t, corpus, force=force, delay=delay)
-        except Exception as exc:  # noqa: BLE001
-            if progress:
-                progress(t, f"ERROR {exc}")
-            return t, []
+        return t, collect_target(t, corpus, force=force, delay=delay)
+        #except Exception as exc:  # noqa: BLE001
+        #    if progress:
+        #        progress(t, f"ERROR {exc}")
+        #    return t, []
 
     for ttype, candidates in group_by_type(seeds).items():
         pool = candidates[:]

@@ -61,8 +61,9 @@ def cli() -> None:
 @click.option("--seed", type=int, default=0, show_default=True, help="shuffle seed")
 @click.option("--delay", type=float, default=0.3, show_default=True, help="per-request delay (s)")
 @click.option("--force", is_flag=True, help="ignore the fetch cache")
-def collect(seeds_path, corpus_root, limit, per_type, workers, oversample, seed, delay, force) -> None:
+def collect(seeds_path, corpus_root, per_type, workers, oversample, seed, delay, force) -> None:
     """Crawl seed targets into a corpus of document sets."""
+    from .collect.registry import augment_corpus
     from .collect.disclosure import augment_disclosure_corpus
 
     p = Path(seeds_path)
@@ -83,6 +84,20 @@ def collect(seeds_path, corpus_root, limit, per_type, workers, oversample, seed,
     click.echo(f"collected {usable} USABLE targets "
                 f"(of {len(out)} attempted) into {corpus_root}")
 
+
+    corpus = Corpus(corpus_root)
+
+    def _progress(t, msg):
+        name = (t.name or t.id) if t else "?"
+        click.echo(f"  {name:30s} {msg}")
+
+    ids = _eval_ids(corpus, True)
+    added = augment_corpus(corpus, target_ids=ids, force=force, delay=delay,
+                           workers=workers, progress=_progress)
+    n_docs = sum(len(v) for v in added.values())
+    click.echo(f"added {n_docs} registry document(s) across {len(added)} target(s)")
+
+
     def _progress(t, msg):
         click.echo(f"  {(t.name or t.id) if t else '?':30s} {msg}")
 
@@ -91,31 +106,6 @@ def collect(seeds_path, corpus_root, limit, per_type, workers, oversample, seed,
                                       delay=delay, workers=workers, progress=_progress)
     n_docs = sum(len(v) for v in added.values())
     click.echo(f"added {n_docs} disclosure document(s) across {len(added)} target(s)")
-
-
-# --------------------------------------------------------------------------- #
-@cli.command()
-@click.option("--corpus", "corpus_root", required=True, help="existing corpus directory")
-@click.option("--workers", type=int, default=8, show_default=True)
-@click.option("--delay", type=float, default=0.3, show_default=True, help="per-request delay (s)")
-@click.option("--force", is_flag=True, help="ignore the fetch cache")
-@click.option("--include-unusable", is_flag=True, help="augment every target")
-def augment(corpus_root, workers, delay, force, include_unusable) -> None:
-    """Add machine-readable registries to an existing corpus."""
-    from .collect.registry import augment_corpus
-
-    corpus = Corpus(corpus_root)
-
-    def _progress(t, msg):
-        name = (t.name or t.id) if t else "?"
-        click.echo(f"  {name:30s} {msg}")
-
-    ids = _eval_ids(corpus, include_unusable)
-    added = augment_corpus(corpus, target_ids=ids, force=force, delay=delay,
-                           workers=workers, progress=_progress)
-    n_docs = sum(len(v) for v in added.values())
-    click.echo(f"added {n_docs} registry document(s) across {len(added)} target(s)")
-
 
 # --------------------------------------------------------------------------- #
 @cli.command()

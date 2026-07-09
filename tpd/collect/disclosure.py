@@ -94,7 +94,6 @@ def augment_disclosure_target(
         )
         corpus.save_doc(target.id, doc, res.text)
         seen_hashes.add(key)
-        added_roles.add(role)
         new_docs.append(doc)
     if new_docs:
         corpus.write_manifest(target, docs + new_docs)
@@ -122,7 +121,7 @@ def augment_disclosure_corpus(
         for fut in as_completed(ex.submit(_one, tid) for tid in ids):
             try:
                 tid, target, new = fut.result()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE00
                 if progress:
                     progress(None, f"ERROR {exc}")
                 continue

@@ -95,6 +95,14 @@ def _is_structured(
     return False, ""
 
 
+def _has_disclosure_clause(doc: Document) -> bool:
+    """Check if document has a disclosure clause early on."""
+    for seg in doc.segments[:200]:
+        if lexicons.positive_sharing(seg) or lexicons.third_party_collects(seg):
+            return True
+    return False
+
+
 def _policy_prose(text: str, role: str, doc: Document) -> tuple[bool, str]:
     """Preliminary check for whether a doc is a prose policy."""
     if len(text) < MIN_PROSE_TEXT:
