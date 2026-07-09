@@ -32,6 +32,12 @@ from .evaluate import (
 # Fetch seed data
 DEFAULT_SEEDS = Path(__file__).resolve().parent.parent / "data_sources"
 
+# Roles benefitting from a JS render.
+_JS_PRONE_ROLES = {
+    "cookie_policy", "vendor_list", "partners_page", "store_listing",
+    "play_data_safety", "subprocessor_list", "do_not_sell", "privacy_policy",
+}
+
 def _eval_ids(corpus, include_unusable: bool):
     """Target ids the metrics run over: the usable corpus by default."""
     return None if include_unusable else usable_target_ids(corpus)
@@ -280,3 +286,114 @@ def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
         labeled_docs=load_typology_gold_docs(typology_gold) if typology_gold else None,
     )
     click.echo(typology_agreement.summary)
+
+
+# --------------------------------------------------------------------------- #
+@cli.command(name="render")
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--targets", default="gold",
+              help="'gold', 'all', or a CSV of target ids")
+@click.option("--typology-gold", default="labels/typology_labels.csv",
+              help="sheet defining the gold set")
+@click.option("--roles", default=None,
+              help="roles to render")
+@click.option("--min-gain", type=int, default=2000,
+              help="only overwrite document when the render adds at least this many chars")
+@click.option("--timeout", type=int, default=30000, help="per-page render timeout (ms)")
+@click.option("--limit", type=int, default=0, help="cap number of docs rendered (0 = no cap)")
+def render_cmd(corpus_root, targets, typology_gold, roles, min_gain, timeout, limit) -> None:
+    """Re-fetch JS-prone documents with headless Chromium."""
+    from .collect.render import Renderer
+
+    corpus = Corpus(corpus_root)
+    role_set = (
+        {r.strip() for r in roles.split(",") if r.strip()} if roles else _JS_PRONE_ROLES
+    )
+    if targets == "all":
+        tids = corpus.list_targets()
+    elif targets == "gold":
+        tids = sorted(load_typology_gold_docs(typology_gold)) if Path(typology_gold).exists() else []
+    else:
+        tids = [t.strip() for t in targets.split(",") if t.strip()]
+    if not tids:
+        click.echo("no targets selected.")
+        return
+
+    rendered = updated = failed = 0
+    with Renderer(timeout_ms=timeout) as r:
+        if not r.available:
+            click.echo("Playwright/browser unavailable.")
+            return
+        for tid in tids:
+            target, docs = corpus.read_manifest(tid)
+            changed = False
+            for d in docs:
+                if d.role not in role_set or not d.url:
+                    continue
+                if limit and rendered >= limit:
+                    break
+                rendered += 1
+                html = r.render(d.url)
+                if not html:
+                    failed += 1
+                    continue
+                old = corpus.read_doc_html(d) if d.raw_path else ""
+                if len(html) >= len(old) + min_gain:
+                    corpus.save_doc(tid, d, html)
+                    d.http_status = d.http_status or 200
+                    d.error = ""
+                    d.fetched_at = __import__("time").time()
+                    updated += 1
+                    changed = True
+            if changed:
+                corpus.write_manifest(target, docs)
+            click.echo(f"  {tid}: rendered, {updated} doc(s) updated so far", err=True)
+    click.echo(f"rendered {rendered} docs across {len(tids)} targets; "
+               f"updated {updated}, failed {failed}.")
+
+
+# --------------------------------------------------------------------------- #
+@cli.command(name="polisis-cache")
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--polisis-root", default=None, help="path to polisis-reimplement")
+def polisis_cache(corpus_root, polisis_root) -> None:
+    """Build the POLISIS cache."""
+    from .classify.polisis_connector import DEFAULT_POLISIS_ROOT, build_cache
+
+    root = polisis_root or DEFAULT_POLISIS_ROOT
+    click.echo(f"running POLISIS over corpus prose docs (root={root}) ...")
+    path = build_cache(corpus_root, polisis_root=root)
+    click.echo(f"wrote verdict cache -> {path}")
+
+
+def _write_outputs(result, out_dir: str) -> None:
+    import csv
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    with open(out / "documents.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["target_id", "target_type", "doc_id", "role", "url", "medium",
+                    "relevant", "facets", "named_orgs", "org_typing", "category_terms",
+                    "doc_class_reason", "structural_fired", "needs_review", "review_reason"])
+        for tc in result.targets:
+            for d in tc.docs:
+                w.writerow([tc.target_id, tc.target_type, d.doc_id, d.role, d.url, d.medium,
+                            int(d.relevant), ";".join(d.facets), ";".join(d.named_orgs),
+                            d.org_typing, ";".join(d.category_terms), d.doc_class_reason,
+                            ";".join(d.structural_fired), int(d.needs_review), d.review_reason])
+    with open(out / "targets.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["target_id", "target_type", "relevant_docs", "typology_class",
+                    "facets", "classified"])
+        for tc in result.targets:
+            w.writerow([tc.target_id, tc.target_type, tc.relevant_docs,
+                        tc.typology_class, ";".join(tc.facets), int(tc.classified)])
+    (out / "summary.json").write_text(json.dumps({
+        "n_targets": len(result.targets),
+        "classified": sum(1 for tc in result.targets if tc.classified),
+    }, indent=2), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    cli()

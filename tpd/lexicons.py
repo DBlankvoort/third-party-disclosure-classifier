@@ -40,6 +40,37 @@ GENERIC_PATTERNS = [
 GENERIC_RE = re.compile(r"\b(" + "|".join(GENERIC_PATTERNS) + r")\b", re.I)
 
 # --------------------------------------------------------------------------- #
+# Inline naming cues
+# --------------------------------------------------------------------------- #
+EXEMPLIFIER_RE = re.compile(
+    r"\b(such as|includ(?:e|es|ing)(?: but not limited to)?|for example|"
+    r"e\.?g\.?|like|for instance|namely|(?:most )?notably|specifically)\b",
+    re.I,
+)
+COMPLETENESS_RE = re.compile(
+    r"\b(the following|as follows|are as follows|complete list of|"
+    r"full list of|all of our|these are all|listed below|our (?:current )?"
+    r"(?:partners?|sub[- ]?processors?|vendors?|providers?) (?:are|include)|"
+    r"consists? of|comprise[ds]? of)\b",
+    re.I,
+)
+
+# --------------------------------------------------------------------------- #
+# External pointer cues
+# --------------------------------------------------------------------------- #
+_PARTNERISH = (r"(?:third[- ]part|partner|advertis|service provider|sub[- ]?processor|"
+               r"compan|vendor|affiliate|provider|recipient|organi[sz]ation|entit)")
+POINTER_PHRASES = [
+    r"(?:click|tap|see) here",
+    rf"(?:for|see) (?:a |the |our )?(?:current |complete |full |updated )?list of {_PARTNERISH}\w*",
+    rf"(?:complete |full |current |updated )?list of (?:our |the |all |current )?{_PARTNERISH}\w*",
+    rf"{_PARTNERISH}\w* (?:are |is )?listed (?:below|here|at|on)",
+    r"available (?:upon|on) request",
+    r"can be found (?:at|here|on)",
+]
+POINTER_RE = re.compile(r"\b(" + "|".join(POINTER_PHRASES) + r")\b", re.I)
+
+# --------------------------------------------------------------------------- #
 # Document-class cues
 # --------------------------------------------------------------------------- #
 
@@ -186,3 +217,82 @@ LINK_DISCOVERY = [
     ("partners_page", re.compile(r"\b(our partners|partner directory|integrations?|app directory)\b", re.I)),
     ("help_doc", re.compile(r"\b(help|support|faq|knowledge ?base)\b", re.I)),
 ]
+
+# --------------------------------------------------------------------------- #
+# Clause detection
+# --------------------------------------------------------------------------- #
+_SENT_BOUND_RE = re.compile(r"(?<=[a-z]{2})[.!?]\s")
+
+
+# --------------------------------------------------------------------------- #
+# Affirmations/negations
+# --------------------------------------------------------------------------- #
+def _affirmative(segment: str, verb_re: re.Pattern) -> bool:
+    """True iff a segment has a non-negated verb."""
+    for m in verb_re.finditer(segment):
+        if _SELF_RECIPIENT_RE.match(segment[m.end():]):
+            continue
+        pre = segment[max(0, m.start() - _NEG_WINDOW):m.start()]
+        cut = max(pre.rfind(". "), pre.rfind("; "), pre.rfind("! "), pre.rfind("? "),
+                  pre.rfind(": "))
+        if cut != -1:
+            pre = pre[cut + 1:]
+        if NEGATION_RE.search(pre):
+            post = segment[m.end():m.end() + _EXC_WINDOW]
+            if EXCEPTION_RE.search(post):
+                return True
+            continue
+        return True
+    return False
+
+
+def positive_sharing(segment: str) -> bool:
+    """True iff a segment makes at least one affirmative sharing claim."""
+    return _affirmative(segment, SHARING_RE)
+
+
+def positive_collection(segment: str) -> bool:
+    """True iff a segment makes at least one affirmative collection claim."""
+    return _affirmative(segment, COLLECTION_RE)
+
+
+
+# --------------------------------------------------------------------------- #
+# Discover clause windows
+# --------------------------------------------------------------------------- #
+def clause_window(segment: str, start: int, width: int) -> str:
+    """``width`` chars of ``segment`` from ``start``, cut at a sentence boundary."""
+    w = segment[start:start + width]
+    cut = _SENT_BOUND_RE.search(w)
+    return w[:cut.start()] if cut else w
+
+
+def _party_follows(segment: str, end: int) -> bool:
+    w = clause_window(segment, end, _PARTY_WINDOW)
+    return bool(GENERIC_RE.search(w) or CATEGORY_RE.search(w))
+
+
+def third_party_collects(segment: str) -> bool:
+    """True iff a third party is described as the collector in the given segment."""
+    anchored = bool(_FP_ANCHOR_RE.search(segment))
+    for pm in GENERIC_RE.finditer(segment):
+        window = clause_window(segment, pm.end(), _TP_COLLECT_WINDOW)
+        if _affirmative(window, COLLECTION_RE):
+            return True
+    # Category-party and tracker-attribution shapes additionally require a first-party anchor.
+    if anchored and _DATA_NOUN_RE.search(segment):
+        for pm in CATEGORY_RE.finditer(segment):
+            window = clause_window(segment, pm.end(), _TP_COLLECT_WINDOW)
+            if _affirmative(window, COLLECTION_RE):
+                return True
+        for tracker_re in (TRACKER_PASSIVE_RE, TRACKER_FROM_RE):
+            for m in tracker_re.finditer(segment):
+                pre = segment[max(0, m.start() - _NEG_WINDOW):m.start()]
+                # Handle negation
+                negated = NEGATION_RE.search(pre) or re.search(r"\bno\s+\w*\s*$", pre, re.I)
+                if not negated and _party_follows(segment, m.end()):
+                    return True
+        # Handle first-party collection on a third-party surface.
+        if ON_THIRD_PARTY_SURFACE_RE.search(segment) and positive_collection(segment):
+            return True
+    return False
