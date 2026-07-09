@@ -127,20 +127,7 @@ def assemble_target(
             tc.relevant_docs += 1
         union |= set(dc.facets)
 
-    # Mirror sharing clauses between the two Play data sharing pages (TODO remove one of them from doc sets).
-    ds = next((d for d in tc.docs if d.role == "play_data_safety" and d.relevant), None)
-    if ds is not None:
-        for d in tc.docs:
-            if d.role == "store_listing" and not d.relevant:
-                d.medium = ds.medium
-                d.facets = list(ds.facets)
-                d.relevant = True
-                d.decisive = True
-                d.evidence = "store-listing data-safety card (mirrors play_data_safety)"
-                union |= set(d.facets)
-
     tc.facets = union
-    # TODO refactor
     decisive = any(dc.decisive for dc in tc.docs)
     pending = any(dc.needs_review for dc in tc.docs)
     tc.classified = decisive and not pending

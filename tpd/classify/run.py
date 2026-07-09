@@ -18,9 +18,6 @@ from .typology_clf import (
     classify_target,
 )
 
-_SHELL_ROLES = {"store_listing", "play_data_safety"}
-# Set limit high enough to reach to the label.
-_SHELL_MAX_BYTES = 800_000
 _MR_ROLES = {"ads_txt", "app_ads_txt", "sellers_json", "vendors_json", "tcf_gvl"}
 # Detect machine-readable from head.
 _MR_MAX_BYTES = 200_000
@@ -34,8 +31,6 @@ class CorpusResult:
 
 
 def _max_bytes_for_role(role: str) -> int:
-    if role in _SHELL_ROLES:
-        return _SHELL_MAX_BYTES
     if role in _MR_ROLES:
         return _MR_MAX_BYTES
     return MAX_HTML_BYTES

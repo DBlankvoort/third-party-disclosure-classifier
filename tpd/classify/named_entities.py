@@ -200,10 +200,6 @@ for _n in gazetteer.SERVICES:
 _GAZ_NAMES = sorted(_GAZ_TYPE, key=len, reverse=True)
 _GAZ_RE = re.compile(r"\b(?:" + "|".join(re.escape(n) for n in _GAZ_NAMES) + r")\b", re.I)
 
-# Cap the amount of table/cell text scanned. 
-_MAX_SCAN = 300_000
-
-
 # Detect non-relevant "Meta" variants ("meta data", "meta tag", "meta description", "meta information").
 _META_NONCOMPANY_RE = re.compile(r"\bmeta[ -](?:data|tag|tags|description|information|keyword|title|name)\b", re.I)
 
@@ -214,7 +210,7 @@ _AMBIGUOUS_GAZ = {"turn", "adjust", "branch", "segment", "heap", "moat", "snap",
 
 
 def gazetteer_orgs(text: str) -> list[tuple[str, str]]:
-    scan = text[:_MAX_SCAN]
+    scan = text
     low = scan.lower()
     hits: dict[str, str] = {}
     for m in _GAZ_RE.finditer(low):

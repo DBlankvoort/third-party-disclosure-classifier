@@ -43,7 +43,7 @@ def collect_play_app(
     docs: list[CollectedDoc] = []
     cache = corpus.cache_dir
 
-    def _save(url: str, role: str) -> CollectedDoc | None:
+    def _save(url: str, role: str, keep: bool = True) -> CollectedDoc | None:
         res = fetch(url, cache_dir=cache, force=force, delay=delay)
         doc = CollectedDoc(
             doc_id=f"{role}-{len(docs):02d}",
@@ -56,10 +56,11 @@ def collect_play_app(
         )
         if res.ok and res.text:
             corpus.save_doc(target.id, doc, res.text)
-            docs.append(doc)
+            if keep:
+                docs.append(doc)
         return doc if res.ok else None
 
-    listing = _save(DETAILS_URL.format(app_id=app_id), "store_listing")
+    listing = _save(DETAILS_URL.format(app_id=app_id), "store_listing", keep=False)
     safety = _save(DATASAFETY_URL.format(app_id=app_id), "play_data_safety")
 
     # follow the developer's privacy policy link if recoverable
