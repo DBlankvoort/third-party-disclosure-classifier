@@ -160,17 +160,66 @@ MACHINE_READABLE_ROLES = frozenset(
     {"ads_txt", "app_ads_txt", "sellers_json", "vendors_json", "tcf_gvl"}
 )
 
+_ADS_TXT_VENDOR_RE = re.compile(
+    r"^\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*,\s*[^,]+,\s*(?:DIRECT|RESELLER)\b",
+    re.I | re.M,
+)
+_JSON_DOMAIN_RE = re.compile(r'"domain"\s*:\s*"([^"]+)"', re.I)
+_JSON_NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"', re.I)
+
+# Registry scaffolding.
+_REGISTRY_NAME_STOP = {"duns", "tag-id", "tagid", "confidential", "ssp", "dsp"}
+
+
+def registry_named_orgs(text: str, kind: str, cap: int = 200) -> list[str]:
+    """Enumerate the named third parties of a machine-readable registry list."""
+    text = text or ""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(v: str) -> None:
+        v = v.strip()
+        key = v.lower()
+        if v and key not in seen and key not in _REGISTRY_NAME_STOP and len(seen) < cap:
+            seen.add(key)
+            out.append(v)
+
+    if kind == "ads_txt":
+        for m in _ADS_TXT_VENDOR_RE.finditer(text):
+            add(m.group(1).lower())
+            if len(seen) >= cap:
+                break
+    elif kind == "sellers_json":
+        for m in _JSON_DOMAIN_RE.finditer(text):
+            add(m.group(1).lower())
+            if len(seen) >= cap:
+                break
+        for m in _JSON_NAME_RE.finditer(text):
+            add(m.group(1))
+            if len(seen) >= cap:
+                break
+    elif kind in ("tcf_gvl", "vendors_json"):
+        # Try to parse as JSON
+        import json
+
+        try:
+            data = json.loads(text)
+            vendors = data.get("vendors") if isinstance(data, dict) else None
+            iterable = vendors.values() if isinstance(vendors, dict) else (vendors or [])
+            for v in iterable:
+                if isinstance(v, dict) and v.get("name"):
+                    add(v["name"])
+                if len(seen) >= cap:
+                    break
+        except Exception:  # noqa: BLE001
+            for m in _JSON_NAME_RE.finditer(text):
+                add(m.group(1))
+                if len(seen) >= cap:
+                    break
+    return out
 
 def machine_readable_kind(text: str) -> str:
-    """Classify a fetched registry file by kind.
-
-    Returns ``'sellers_json'`` / ``'tcf_gvl'`` / ``'vendors_json'`` / ``'ads_txt'``
-    when ``text`` is a real, non-empty registry, else ``''``.
-    
-    JSON is checked before ads.txt because JSON can also contain
-    domain-like substrings; GVL is checked before vendors.json
-    because the GVL also has a ``"vendors"`` array.
-    """
+    """Classify a fetched registry file by kind."""
     if SELLERS_JSON_RE.search(text):
         return "sellers_json"
     if TCF_GVL_RE.search(text):

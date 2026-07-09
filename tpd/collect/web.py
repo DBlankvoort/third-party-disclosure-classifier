@@ -75,7 +75,6 @@ def collect_website(
     corpus: Corpus,
     force: bool = False,
     delay: float = 0.3,
-    max_companions: int = MAX_COMPANION_DOCS,
 ) -> list[CollectedDoc]:
     """Collect ``target``'s document set."""
     docs: list[CollectedDoc] = []
@@ -135,7 +134,6 @@ def collect_website(
 
     # 4. fetch discovered companion docs ------------------------------------ #
     seen_urls = {d.url for d in docs}
-    seen_roles = {d.role for d in docs}
     for role, urls in discovered.items():
         for url in urls:
             if role == "privacy_policy" or role not in _COMPANION_ROLES:
@@ -146,7 +144,6 @@ def collect_website(
                 continue
             _save(url, role, dedup=True)
             seen_urls.add(url)
-            seen_roles.add(role)
 
     # 5. try conventional companion paths for high-value surfaces not yet found.
     roots = []
@@ -156,8 +153,6 @@ def collect_website(
             if r not in roots:
                 roots.append(r)
     for role, paths in COMMON_COMPANION_PATHS:
-        if role in seen_roles or n >= max_companions:
-            continue
         done = False
         for root in roots:
             for path in paths:
@@ -167,7 +162,6 @@ def collect_website(
                 got = _save(cand, role, dedup=True)
                 seen_urls.add(cand)
                 if got is not None:
-                    seen_roles.add(role)
                     n += 1
                     done = True
                     break

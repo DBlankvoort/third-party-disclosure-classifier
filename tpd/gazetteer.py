@@ -1,8 +1,4 @@
-"""Curated gazetteers for third-party disclosure.
-
-NOTE ON ORDER OF PREFERENCE: a string is classified as a SERVICE if it matches a
-SERVICES entry, otherwise as a COMPANY if it matches a COMPANIES entry, otherwise 'unknown'.
-"""
+"""Curated gazetteers for third-party disclosure."""
 
 # Named services / products.
 SERVICES = {

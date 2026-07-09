@@ -19,7 +19,7 @@ from .collect.runner import (
     usable_target_ids,
 )
 from .evaluate import (
-    goal2_relevance,
+    relevance,
     agreement,
     latency,
     load_relevance_gold,

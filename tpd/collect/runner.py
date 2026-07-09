@@ -69,6 +69,32 @@ def load_seed_dir(seed_dir: str | Path) -> list[Target]:
         targets.extend(load_seeds(p))
     return targets
 
+def collect_seeds(
+    seeds: list[Target],
+    corpus: Corpus,
+    force: bool = False,
+    delay: float = 0.3,
+    limit: int | None = None,
+    progress=None,
+) -> dict[str, list[CollectedDoc]]:
+    """Collect a list of targets."""
+    out: dict[str, list[CollectedDoc]] = {}
+    for i, t in enumerate(seeds):
+        if limit is not None and i >= limit:
+            break
+        try:
+            out[t.id] = collect_target(t, corpus, force=force, delay=delay)
+        except Exception as exc:  # noqa: BLE001
+            out[t.id] = []
+            if progress:
+                progress(t, f"ERROR {exc}")
+            continue
+        if progress:
+            ok = sum(1 for d in out[t.id] if d.ok)
+            progress(t, f"{ok}/{len(out[t.id])} docs")
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Check usability
 # ---------------------------------------------------------------------------

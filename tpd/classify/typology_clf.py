@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..extract import Document
-from ..typology import Medium, facet_code, media_of, sort_facets
+from ..typology import Medium, facet_code
 from .document_class import DocClass, classify_medium
 from .specificity import SpecScan, specificities_in_doc
 from .structural import StructuralSignals, structural_signals

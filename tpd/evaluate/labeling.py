@@ -118,3 +118,56 @@ def write_typology_sheet(result: CorpusResult, path: str | Path,
                 })
                 rows += 1
     return rows
+
+
+def load_relevance_gold(path: str | Path) -> dict[tuple[str, str], int]:
+    """Load relevance gold rows."""
+    gold: dict[tuple[str, str], int] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            v = (row.get("gold_relevant") or "").strip()
+            if v in ("0", "1"):
+                gold[(row["target_id"], row["doc_id"])] = int(v)
+    return gold
+
+
+def load_typology_gold(path: str | Path) -> dict[str, set]:
+    """Load typology gold rows."""
+    agg: dict[str, set] = {}
+    touched: set[str] = set()
+    notes: list[str] = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tid = row.get("target_id") or ""
+            raw = (row.get("gold_facets") or "").strip()
+            if not raw:
+                continue
+            touched.add(tid)
+            facets = agg.setdefault(tid, set())
+            for code in raw.split(";"):
+                code = code.strip()
+                if not code or code.lower() == "none":
+                    continue
+                canon, note = canon_facet_code(code)
+                if note:
+                    notes.append(f"{tid}/{row.get('doc_id','')}: {note}")
+                if canon:
+                    facets.add(canon)
+    if notes:
+        print(f"[gold] canonicalised {len(notes)} malformed gold facet code(s):",
+              file=sys.stderr)
+        for n in notes:
+            print(f"[gold]   {n}", file=sys.stderr)
+    return {tid: agg.get(tid, set()) for tid in touched}
+
+
+def load_typology_gold_docs(path: str | Path) -> dict[str, set]:
+    """Load docs for which typology gold exists."""
+    docs: dict[str, set] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tid = row.get("target_id") or ""
+            did = row.get("doc_id") or ""
+            if tid and did:
+                docs.setdefault(tid, set()).add(did)
+    return docs
