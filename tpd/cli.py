@@ -20,7 +20,7 @@ from .collect.runner import (
 )
 from .evaluate import (
     goal2_relevance,
-    goal3_agreement,
+    agreement,
     latency,
     load_relevance_gold,
     load_typology_gold,
@@ -125,18 +125,18 @@ def augment(corpus_root, workers, delay, force, include_unusable) -> None:
 def classify(corpus_root, out_dir, no_ner, polisis, workers, include_unusable, quiet) -> None:
     """Run relevance + faceted typology classifiers over a corpus."""
     corpus = Corpus(corpus_root)
-    backend = None
+    cache = None
     if polisis:
         from .classify.polisis_connector import load_cache
 
-        backend = load_cache(corpus_root)
-        click.echo(f"polisis backend: {'loaded' if backend else 'not available'}")
+        cache = load_cache(corpus_root)
+        click.echo(f"polisis cache: {'loaded' if cache else 'not available'}")
 
     ids = _eval_ids(corpus, include_unusable)
     if ids is not None:
         click.echo(f"classifying {len(ids)} usable targets "
                    f"(of {len(corpus.list_targets())} attempted)")
-    result = classify_corpus(corpus, use_ner=not no_ner, backend=backend, target_ids=ids,
+    result = classify_corpus(corpus, use_ner=not no_ner, cache=cache, target_ids=ids,
                              workers=workers)
     if not quiet:
         for tc in result.targets:
@@ -242,3 +242,41 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
         click.echo("Label the first ~50 targets by label_order, fill gold_*, then "
                    "`python -m tpd eval`.")
 
+
+# --------------------------------------------------------------------------- #
+@cli.command(name="eval")
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--relevance-gold", default=None, help="hand-labelled relevance sheet")
+@click.option("--typology-gold", default=None, help="hand-labelled typology sheet")
+@click.option("--no-ner", is_flag=True)
+@click.option("--polisis", is_flag=True)
+@click.option("--workers", type=int, default=8, show_default=True,
+              help="documents classified in parallel per target")
+@click.option("--include-unusable", is_flag=True)
+def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
+          include_unusable) -> None:
+    """Score key metrics."""
+    corpus = Corpus(corpus_root)
+    cache = None
+    if polisis:
+        from .classify.polisis_connector import load_cache
+
+        cache = load_cache(corpus_root)
+    result = classify_corpus(corpus, use_ner=not no_ner, cache=cache,
+                             target_ids=_eval_ids(corpus, include_unusable), workers=workers)
+
+    click.echo(latency(result).summary)
+
+    if relevance_gold:
+        gold = load_relevance_gold(relevance_gold)
+        if gold:
+            click.echo(relevance(result, gold).summary)
+        else:
+            click.echo("No filled gold_relevant rows found.")
+
+    typology_agreement = agreement(
+        result,
+        load_typology_gold(typology_gold) if typology_gold else {},
+        labeled_docs=load_typology_gold_docs(typology_gold) if typology_gold else None,
+    )
+    click.echo(typology_agreement.summary)

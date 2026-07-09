@@ -68,14 +68,14 @@ def _classify_doc_job(payload: tuple) -> tuple[DocClassification, float]:
 def classify_corpus(
     corpus: Corpus,
     use_ner: bool = True,
-    backend=None,
+    cache=None,
     target_ids: list[str] | None = None,
     workers: int = 1,
 ) -> CorpusResult:
     """Classify every target in the corpus."""
     result = CorpusResult()
     ids = target_ids if target_ids is not None else corpus.list_targets()
-    parallel = workers > 1 and backend is None
+    parallel = workers > 1 and cache is None
 
     ner_fn, _ = load_ner(enable=use_ner) if not parallel else (None, None)
     pool = (
@@ -115,7 +115,7 @@ def classify_corpus(
                     parsed.append((doc, d.role, d.doc_id, d.url))
                     result.doc_seconds.append(time.perf_counter() - d0)
                 tc = classify_target(
-                    target.type, parsed, target_id=tid, ner_fn=ner_fn, backend=backend,
+                    target.type, parsed, target_id=tid, ner_fn=ner_fn, cache=cache,
                     first_party=first_party,
                 )
 

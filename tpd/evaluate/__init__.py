@@ -8,12 +8,12 @@ from .labeling import (
     write_typology_sheet,
 )
 from .metrics import (
-    Goal2Report,
-    Goal3Report,
+    RelevanceReport,
+    AgreementReport,
     LatencyReport,
-    goal2_relevance,
-    goal3_agreement,
-    goal3_coverage,
+    relevance,
+    agreement,
+    coverage,
     latency,
 )
 
@@ -23,11 +23,11 @@ __all__ = [
     "load_relevance_gold",
     "load_typology_gold",
     "load_typology_gold_docs",
-    "Goal2Report",
-    "Goal3Report",
+    "RelevanceReport",
+    "AgreementReport",
     "LatencyReport",
-    "goal2_relevance",
-    "goal3_coverage",
-    "goal3_agreement",
+    "relevance",
+    "coverage",
+    "agreement",
     "latency",
 ]
