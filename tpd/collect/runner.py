@@ -7,6 +7,7 @@ import time
 import random
 from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 import sys
 from urllib.parse import urljoin, urlparse
@@ -161,7 +162,7 @@ def collect_stratified(
     out: dict[str, list[CollectedDoc]] = {}
 
     def _safe(t: Target) -> tuple[Target, list[CollectedDoc]]:
-        return t, collect_target(t, corpus, force=force, delay=delay)
+        return t, fetch_target(t, corpus, force=force, delay=delay)
         #except Exception as exc:  # noqa: BLE001
         #    if progress:
         #        progress(t, f"ERROR {exc}")
@@ -297,37 +298,6 @@ def augment_disclosure_target(
     return new_docs
 
 
-def augment_disclosure_corpus(
-    corpus: Corpus,
-    target_ids: list[str] | None = None,
-    force: bool = False,
-    delay: float = 0.3,
-    workers: int = 8,
-    progress=None,
-) -> dict[str, list[CollectedDoc]]:
-    """Back-fill companion disclosure docs."""
-    ids = target_ids if target_ids is not None else corpus.list_targets()
-    added: dict[str, list[CollectedDoc]] = {}
-
-    def _one(tid: str):
-        target, docs = corpus.read_manifest(tid)
-        return tid, target, augment_disclosure_target(corpus, target, docs,
-                                                       force=force, delay=delay)
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        for fut in as_completed(ex.submit(_one, tid) for tid in ids):
-            try:
-                tid, target, new = fut.result()
-            except Exception as exc:  # noqa: BLE00
-                if progress:
-                    progress(None, f"ERROR {exc}")
-                continue
-            if new:
-                added[tid] = new
-            if progress and new:
-                progress(target, f"+{len(new)}: " + ",".join(d.role for d in new))
-    return added
-
 # (conventional path, doc role) per target type.
 _WEB_PATHS = [
     ("/ads.txt", "ads_txt"),
@@ -396,36 +366,16 @@ def augment_target(
     return new_docs
 
 
-def augment_corpus(
-    corpus: Corpus,
-    target_ids: list[str] | None = None,
-    force: bool = False,
-    delay: float = 0.3,
-    workers: int = 8,
-    progress=None,
-) -> dict[str, list[CollectedDoc]]:
-    """Augment every (or a chosen subset of) target with its registry files."""
-    ids = target_ids if target_ids is not None else corpus.list_targets()
-    added: dict[str, list[CollectedDoc]] = {}
-
-    def _one(tid: str):
-        target, docs = corpus.read_manifest(tid)
-        return tid, target, augment_target(corpus, target, docs, force=force, delay=delay)
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        for fut in as_completed(ex.submit(_one, tid) for tid in ids):
-            try:
-                tid, target, new = fut.result()
-            except Exception as exc:  # noqa: BLE001
-                if progress:
-                    progress(None, f"ERROR {exc}")
-                continue
-            if new:
-                added[tid] = new
-            if progress:
-                roles = ",".join(d.role for d in new) or "-"
-                progress(target, f"{len(new)} registry doc(s): {roles}")
-    return added
+def fetch_target(
+    target: Target, corpus: Corpus, force: bool = False, delay: float = 0.3
+) -> list[CollectedDoc]:
+    """Collect a target and immediately back-fill its registry + companion
+    disclosure docs, so a single fetch produces the whole document set.
+    """
+    docs = collect_target(target, corpus, force=force, delay=delay)
+    docs = docs + augment_target(corpus, target, docs, force=force, delay=delay)
+    docs = docs + augment_disclosure_target(corpus, target, docs, force=force, delay=delay)
+    return docs
 
 
 # Controls that reveal a hidden CMP / cookie vendor list.
@@ -510,3 +460,120 @@ def render_html(url: str, timeout_ms: int = 30000, settle_ms: int = 2500,
     with Renderer(timeout_ms=timeout_ms, settle_ms=settle_ms,
                   expand_consent=expand_consent) as r:
         return r.render(url)
+
+
+# Roles benefitting from a JS render.
+JS_PRONE_ROLES = {
+    "cookie_policy", "vendor_list", "partners_page", "store_listing",
+    "play_data_safety", "subprocessor_list", "do_not_sell", "privacy_policy",
+}
+
+# Minimal amount of gain required to keep a re-render over the static fetch.
+RENDER_MIN_GAIN = 2000
+# Per-page render timeout (ms).
+RENDER_TIMEOUT_MS = 30000
+
+
+def render_corpus(
+    corpus: Corpus,
+    target_ids: list[str] | None = None,
+    roles: set[str] | None = None,
+    render_limit: int = 0,
+    timeout_ms: int = RENDER_TIMEOUT_MS,
+    min_gain: int = RENDER_MIN_GAIN,
+    progress=None,
+) -> tuple[int, int, int]:
+    """Re-fetch JS-prone docs with a headless browser.
+    """
+    role_set = roles if roles is not None else JS_PRONE_ROLES
+    tids = target_ids if target_ids is not None else corpus.list_targets()
+    rendered = updated = failed = 0
+    with Renderer(timeout_ms=timeout_ms) as r:
+        if not r.available:
+            if progress:
+                progress(None, "Playwright/browser unavailable; skipping render step.")
+            return rendered, updated, failed
+        for tid in tids:
+            target, docs = corpus.read_manifest(tid)
+            changed = False
+            for d in docs:
+                if d.role not in role_set or not d.url:
+                    continue
+                if render_limit and rendered >= render_limit:
+                    break
+                rendered += 1
+                html = r.render(d.url)
+                if not html:
+                    failed += 1
+                    continue
+                old = corpus.read_doc_html(d) if d.raw_path else ""
+                if len(html) >= len(old) + min_gain:
+                    corpus.save_doc(tid, d, html)
+                    d.http_status = d.http_status or 200
+                    d.error = ""
+                    d.fetched_at = time.time()
+                    updated += 1
+                    changed = True
+            if changed:
+                corpus.write_manifest(target, docs)
+            if progress:
+                progress(target, f"rendered, {updated} doc(s) updated so far")
+    return rendered, updated, failed
+
+
+# Roles produced by the per-target augment steps folded into fetch_target.
+_REGISTRY_ROLES = {role for _, role in _WEB_PATHS + _APP_PATHS}
+
+
+@dataclass
+class CollectionReport:
+    """Outcome of a full :func:`run_collection` pass."""
+
+    collected: dict[str, list[CollectedDoc]] = field(default_factory=dict)
+    usable: int = 0
+    attempted: int = 0
+    registry_docs: int = 0
+    disclosure_docs: int = 0
+    rendered: int = 0
+    updated: int = 0
+    failed: int = 0
+
+
+def run_collection(
+    seeds: list[Target],
+    corpus: Corpus,
+    per_type: int,
+    workers: int = 8,
+    delay: float = 0.3,
+    force: bool = False,
+    seed: int = 0,
+    oversample: int = 8,
+    render: bool = True,
+    render_limit: int = 0,
+    progress=None,
+) -> CollectionReport:
+    """Run the full fetcher pipeline: stratified crawl (with registry and
+    disclosure back-fill folded into each target's fetch), then an optional
+    JS-render pass over the resulting corpus.
+    """
+    report = CollectionReport()
+
+    report.collected = collect_stratified(
+        seeds, corpus, per_type=per_type, workers=workers, delay=delay,
+        force=force, seed=seed, oversample=oversample, progress=progress,
+    )
+    seed_type = {s.id: s.type for s in seeds}
+    report.attempted = len(report.collected)
+    report.usable = sum(
+        1 for tid, docs in report.collected.items()
+        if docset_usable(corpus, seed_type.get(tid, tid.split("__")[0]), docs)
+    )
+    all_docs = [d for docs in report.collected.values() for d in docs]
+    report.registry_docs = sum(1 for d in all_docs if d.role in _REGISTRY_ROLES)
+    report.disclosure_docs = sum(1 for d in all_docs if d.role in _BACKFILL_ROLES)
+
+    if render:
+        report.rendered, report.updated, report.failed = render_corpus(
+            corpus, target_ids=None, render_limit=render_limit, progress=progress,
+        )
+    return report

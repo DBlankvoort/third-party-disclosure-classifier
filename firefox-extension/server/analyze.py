@@ -6,8 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from tpd.collect.base import Corpus, Target
-from tpd.collect.registry import augment_corpus
-from tpd.collect.runner import collect_target, docset_usable
+from tpd.collect.runner import docset_usable, fetch_target
 from tpd.classify.run import classify_corpus
 from tpd.typology import TargetType, media_of
 
@@ -47,9 +46,7 @@ def analyze_url(
     cached = manifest.exists() and not force
 
     if not cached:
-        # Discover the document set, then machine-readable registries.
-        collect_target(target, corpus, force=force, delay=delay)
-        augment_corpus(corpus, target_ids=[target.id], force=force, delay=delay, workers=4)
+        fetch_target(target, corpus, force=force, delay=delay)
 
     # Classify the target.
     result = classify_corpus(corpus, use_ner=use_ner, target_ids=[target.id])
