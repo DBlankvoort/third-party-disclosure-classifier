@@ -329,6 +329,35 @@ EXCEPTION_RE = re.compile(
 # How far forward to look for an exception
 _EXC_WINDOW = 140
 
+# How far forward to look for a third-party collection clause
+_TP_COLLECT_WINDOW = 90
+
+# How far forward to look for a party
+_PARTY_WINDOW = 70
+
+# Tracker detection
+_TRACKER_NOUN = (
+    r"(?:cookies?|pixel(?:\s+tags?)?|tags?|trackers?|scripts?|sdks?|"
+    r"web\s+beacons?|(?:tracking|similar)\s+technolog\w+|technolog\w+)"
+)
+TRACKER_PASSIVE_RE = re.compile(
+    _TRACKER_NOUN + r"[^.;:!?]{0,40}?\b(?:placed|set|used|operated|served|"
+    r"provided|integrated|deployed|collected)\s+by\b",
+    re.I,
+)
+TRACKER_FROM_RE = re.compile(_TRACKER_NOUN + r"[^.;:!?]{0,60}?\bfrom\b", re.I)
+
+# First party group cues
+_FP_GROUP_TERMS = {"affiliate", "affiliates", "subsidiary", "subsidiaries"}
+_FP_GROUP_POSSESSIVE_RE = re.compile(r"\b(?:its|our|their)\s+$", re.I)
+
+# First-party collection happening on a third-party surface
+ON_THIRD_PARTY_SURFACE_RE = re.compile(
+    r"\b(?:on|via|through|across)\s+third[- ]part(?:y|ies)\s+"
+    r"(?:web\s*)?(?:sites?|websites?|platforms?|apps?|applications?|services?)\b",
+    re.I,
+)
+
 _SELF_RECIPIENT_RE = re.compile(r"^\s*(?:(?:to|with)\s+)?(?:you|us)\b", re.I)
 
 

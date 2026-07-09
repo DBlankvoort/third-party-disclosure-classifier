@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import csv
+import time
 import random
 from collections import OrderedDict
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait, as_completed
 from pathlib import Path
+import sys
+from urllib.parse import urljoin, urlparse
 
+from .. import lexicons
+from ..typology import TargetType
+from .base import CollectedDoc, Corpus, Target, fetch
 from ..classify.document_class import classify_medium
 from ..extract import parse_html
-from ..typology import TargetType
 from .appstore import collect_app_store_app
-from .base import CollectedDoc, Corpus, Target
 from .playstore import collect_play_app
-from .web import collect_website
+from .web import (
+    COMMON_COMPANION_PATHS,
+    _COMPANION_ROLES,
+    collect_website,
+    _content_key,
+    _discover_links,
+    _same_site,
+)
 
 _DISPATCH = {
     TargetType.WEBSITE.value: collect_website,
@@ -201,3 +212,301 @@ def collect_stratified(
             progress(Target(id="", type=ttype),
                      f"== {ttype}: {usable} usable from {attempted} attempts ==")
     return out
+
+_WEB_TYPES = {TargetType.WEBSITE.value, TargetType.DATA_BROKER.value}
+# Companion disclosure roles worth back-filling.
+_BACKFILL_ROLES = {"vendor_list", "subprocessor_list", "do_not_sell", "partners_page"}
+
+
+def _policy_host(docs: list[CollectedDoc]) -> str:
+    for d in docs:
+        if d.role == "privacy_policy" and d.url:
+            return urlparse(d.url).netloc
+    return ""
+
+
+def augment_disclosure_target(
+    corpus: Corpus,
+    target: Target,
+    docs: list[CollectedDoc],
+    force: bool = False,
+    delay: float = 0.3,
+) -> list[CollectedDoc]:
+    """Discover + append missing companion disclosure docs."""
+    if target.type not in _WEB_TYPES:
+        return []
+    existing_roles = {d.role for d in docs}
+    existing_urls = {d.url for d in docs}
+    base_host = urlparse(target.url).netloc if target.url else ""
+    policy_host = _policy_host(docs)
+
+    # 1. Candidate (url -> role) from links in the already-saved documents
+    #    + a live re-fetch of the homepage.
+    candidates: dict[str, str] = {}
+    htmls = [(corpus.read_doc_html(d), d.url) for d in docs if d.ok]
+    if target.url:
+        hr = fetch(target.url, cache_dir=corpus.cache_dir, force=force, delay=delay)
+        if hr.ok and hr.text:
+            htmls.append((hr.text, hr.final_url or target.url))
+    for html, base in htmls:
+        for role, urls in _discover_links(html, base).items():
+            for url in urls:
+                if (role in _BACKFILL_ROLES and role not in existing_roles
+                        and url not in existing_urls
+                        and _same_site(url, base_host, policy_host)):
+                    candidates.setdefault(url, role)
+
+    # 2. Conventional paths still missing.
+    roots = []
+    for h in (base_host, policy_host):
+        if h and (r := f"https://{h}") not in roots:
+            roots.append(r)
+    for role, paths in COMMON_COMPANION_PATHS:
+        if role not in _BACKFILL_ROLES or role in existing_roles:
+            continue
+        if any(r == role for r in candidates.values()):
+            continue
+        for root in roots:
+            for path in paths:
+                candidates.setdefault(urljoin(root + "/", path.lstrip("/")), role)
+
+    # 3. Fetch candidates
+    seen_hashes = {_content_key(corpus.read_doc_html(d)) for d in docs if d.ok}
+    new_docs: list[CollectedDoc] = []
+    base_idx = len(docs)
+    for url, role in candidates.items():
+        res = fetch(url, cache_dir=corpus.cache_dir, force=force, delay=delay)
+        if not (res.ok and res.text):
+            continue
+        key = _content_key(res.text)
+        if key in seen_hashes:
+            continue
+        doc = CollectedDoc(
+            doc_id=f"{role}-{base_idx + len(new_docs):02d}",
+            url=res.final_url or url,
+            role=role,
+            http_status=res.status,
+            content_type=res.content_type,
+            fetched_at=time.time(),
+        )
+        corpus.save_doc(target.id, doc, res.text)
+        seen_hashes.add(key)
+        new_docs.append(doc)
+    if new_docs:
+        corpus.write_manifest(target, docs + new_docs)
+    return new_docs
+
+
+def augment_disclosure_corpus(
+    corpus: Corpus,
+    target_ids: list[str] | None = None,
+    force: bool = False,
+    delay: float = 0.3,
+    workers: int = 8,
+    progress=None,
+) -> dict[str, list[CollectedDoc]]:
+    """Back-fill companion disclosure docs."""
+    ids = target_ids if target_ids is not None else corpus.list_targets()
+    added: dict[str, list[CollectedDoc]] = {}
+
+    def _one(tid: str):
+        target, docs = corpus.read_manifest(tid)
+        return tid, target, augment_disclosure_target(corpus, target, docs,
+                                                       force=force, delay=delay)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in as_completed(ex.submit(_one, tid) for tid in ids):
+            try:
+                tid, target, new = fut.result()
+            except Exception as exc:  # noqa: BLE00
+                if progress:
+                    progress(None, f"ERROR {exc}")
+                continue
+            if new:
+                added[tid] = new
+            if progress and new:
+                progress(target, f"+{len(new)}: " + ",".join(d.role for d in new))
+    return added
+
+# (conventional path, doc role) per target type.
+_WEB_PATHS = [
+    ("/ads.txt", "ads_txt"),
+    ("/sellers.json", "sellers_json"),
+    ("/vendors.json", "vendors_json"),
+]
+_APP_PATHS = [
+    ("/app-ads.txt", "app_ads_txt"),
+    ("/sellers.json", "sellers_json"),
+    ("/vendors.json", "vendors_json"),
+]
+_APP_TYPES = {TargetType.PLAY_STORE_APP.value, TargetType.APP_STORE_APP.value}
+
+
+def registry_paths_for(target_type: str) -> list[tuple[str, str]]:
+    return _APP_PATHS if target_type in _APP_TYPES else _WEB_PATHS
+
+
+def _root_url(target: Target, docs: list[CollectedDoc]) -> str:
+    """Find the best host root for a target's domain."""
+    skip = ("play.google.com", "itunes.apple.com", "apps.apple.com", "policies.google.com")
+    for cand in (target.seed_policy_url, target.url, *(d.url for d in docs if d.role == "privacy_policy"),
+                 *(d.url for d in docs)):
+        if not cand:
+            continue
+        p = urlparse(cand)
+        if p.netloc and not any(s in p.netloc for s in skip):
+            return f"{p.scheme or 'https'}://{p.netloc}"
+    return ""
+
+
+def augment_target(
+    corpus: Corpus,
+    target: Target,
+    docs: list[CollectedDoc],
+    force: bool = False,
+    delay: float = 0.3,
+) -> list[CollectedDoc]:
+    """Fetch registry files."""
+    root = _root_url(target, docs)
+    if not root:
+        return []
+    existing_roles = {d.role for d in docs}
+    new_docs: list[CollectedDoc] = []
+    base_idx = len(docs)
+    for path, role in registry_paths_for(target.type):
+        if role in existing_roles:
+            continue
+        url = urljoin(root + "/", path.lstrip("/"))
+        res = fetch(url, cache_dir=corpus.cache_dir, force=force, delay=delay)
+        kind = lexicons.machine_readable_kind(res.text) if (res.ok and res.text) else ""
+        if not kind:
+            continue  # dead URL / 404 HTML / empty
+        doc = CollectedDoc(
+            doc_id=f"{role}-{base_idx + len(new_docs):02d}",
+            url=res.final_url or url,
+            role=role,
+            http_status=res.status,
+            content_type=res.content_type,
+            fetched_at=time.time(),
+        )
+        corpus.save_doc(target.id, doc, res.text)
+        new_docs.append(doc)
+    if new_docs:
+        corpus.write_manifest(target, docs + new_docs)
+    return new_docs
+
+
+def augment_corpus(
+    corpus: Corpus,
+    target_ids: list[str] | None = None,
+    force: bool = False,
+    delay: float = 0.3,
+    workers: int = 8,
+    progress=None,
+) -> dict[str, list[CollectedDoc]]:
+    """Augment every (or a chosen subset of) target with its registry files."""
+    ids = target_ids if target_ids is not None else corpus.list_targets()
+    added: dict[str, list[CollectedDoc]] = {}
+
+    def _one(tid: str):
+        target, docs = corpus.read_manifest(tid)
+        return tid, target, augment_target(corpus, target, docs, force=force, delay=delay)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for fut in as_completed(ex.submit(_one, tid) for tid in ids):
+            try:
+                tid, target, new = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                if progress:
+                    progress(None, f"ERROR {exc}")
+                continue
+            if new:
+                added[tid] = new
+            if progress:
+                roles = ",".join(d.role for d in new) or "-"
+                progress(target, f"{len(new)} registry doc(s): {roles}")
+    return added
+
+
+# Controls that reveal a hidden CMP / cookie vendor list.
+_CONSENT_EXPANDERS = [
+    "text=/manage (cookies|preferences|settings|options)/i",
+    "text=/cookie settings/i",
+    "text=/(see|show|view|manage|our) (vendors|partners|third part)/i",
+    "text=/vendor(s| list)/i",
+    "text=/more (options|information)/i",
+    "text=/customi[sz]e/i",
+]
+
+
+class Renderer:
+    """Reusable headless-Chromium renderer."""
+
+    def __init__(self, timeout_ms: int = 30000, settle_ms: int = 2500,
+                 expand_consent: bool = True):
+        self.timeout_ms = timeout_ms
+        self.settle_ms = settle_ms
+        self.expand_consent = expand_consent
+        self._pw = None
+        self._browser = None
+        self.available = False
+
+    def __enter__(self) -> "Renderer":
+        try:
+            from playwright.sync_api import sync_playwright
+
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self.available = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[render] Playwright unavailable ({exc}); static fetch only",
+                  file=sys.stderr)
+            self.available = False
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        finally:
+            if self._pw is not None:
+                self._pw.stop()
+
+    def render(self, url: str) -> str | None:
+        """Return the post-JS DOM HTML of ``url``, or ``None`` on failure."""
+        if not self.available or not url:
+            return None
+        page = None
+        try:
+            page = self._browser.new_page()
+            page.goto(url, wait_until="networkidle", timeout=self.timeout_ms)
+            if self.expand_consent:
+                self._expand(page)
+            page.wait_for_timeout(self.settle_ms)
+            return page.content()
+        except Exception:  # noqa: BLE001
+            return None
+        finally:
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _expand(self, page) -> None:
+        for sel in _CONSENT_EXPANDERS:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() and loc.is_visible():
+                    loc.click(timeout=2500)
+                    page.wait_for_timeout(800)
+            except Exception:  # noqa: BLE001
+                continue
+
+
+def render_html(url: str, timeout_ms: int = 30000, settle_ms: int = 2500,
+                expand_consent: bool = True) -> str | None:
+    """One-shot convenience: render a single ``url`` (launches/closes a browser)."""
+    with Renderer(timeout_ms=timeout_ms, settle_ms=settle_ms,
+                  expand_consent=expand_consent) as r:
+        return r.render(url)

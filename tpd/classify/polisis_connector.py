@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..extract import Document
 
-DEFAULT_POLISIS_ROOT = Path(__file__).resolve().parents[2] / "polisis"
+DEFAULT_POLISIS_ROOT = "../polisis"
 CACHE_NAME = "_polisis_thirdparty.json"
 
 

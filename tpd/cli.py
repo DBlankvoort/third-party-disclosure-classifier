@@ -13,6 +13,9 @@ from .collect.base import Corpus
 from .collect.runner import (
     collect_seeds,
     collect_stratified,
+    augment_corpus,
+    augment_disclosure_corpus,
+    Renderer,
     docset_usable,
     load_seed_dir,
     load_seeds,
@@ -63,9 +66,6 @@ def cli() -> None:
 @click.option("--force", is_flag=True, help="ignore the fetch cache")
 def collect(seeds_path, corpus_root, per_type, workers, oversample, seed, delay, force) -> None:
     """Crawl seed targets into a corpus of document sets."""
-    from .collect.registry import augment_corpus
-    from .collect.disclosure import augment_disclosure_corpus
-
     p = Path(seeds_path)
     seeds = load_seed_dir(p) if p.is_dir() else load_seeds(p)
     click.echo(f"loaded {len(seeds)} seed targets from {seeds_path}")
@@ -106,6 +106,52 @@ def collect(seeds_path, corpus_root, per_type, workers, oversample, seed, delay,
                                       delay=delay, workers=workers, progress=_progress)
     n_docs = sum(len(v) for v in added.values())
     click.echo(f"added {n_docs} disclosure document(s) across {len(added)} target(s)")
+
+    corpus = Corpus(corpus_root)
+    role_set = (
+        {r.strip() for r in roles.split(",") if r.strip()} if roles else _JS_PRONE_ROLES
+    )
+    if targets == "all":
+        tids = corpus.list_targets()
+    elif targets == "gold":
+        tids = sorted(load_typology_gold_docs(typology_gold)) if Path(typology_gold).exists() else []
+    else:
+        tids = [t.strip() for t in targets.split(",") if t.strip()]
+    if not tids:
+        click.echo("no targets selected.")
+        return
+
+    rendered = updated = failed = 0
+    with Renderer(timeout_ms=timeout) as r:
+        if not r.available:
+            click.echo("Playwright/browser unavailable.")
+            return
+        for tid in tids:
+            target, docs = corpus.read_manifest(tid)
+            changed = False
+            for d in docs:
+                if d.role not in role_set or not d.url:
+                    continue
+                if limit and rendered >= limit:
+                    break
+                rendered += 1
+                html = r.render(d.url)
+                if not html:
+                    failed += 1
+                    continue
+                old = corpus.read_doc_html(d) if d.raw_path else ""
+                if len(html) >= len(old) + min_gain:
+                    corpus.save_doc(tid, d, html)
+                    d.http_status = d.http_status or 200
+                    d.error = ""
+                    d.fetched_at = __import__("time").time()
+                    updated += 1
+                    changed = True
+            if changed:
+                corpus.write_manifest(target, docs)
+            click.echo(f"  {tid}: rendered, {updated} doc(s) updated so far", err=True)
+    click.echo(f"rendered {rendered} docs across {len(tids)} targets; "
+               f"updated {updated}, failed {failed}.")
 
 # --------------------------------------------------------------------------- #
 @cli.command()
@@ -231,12 +277,6 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
     n2 = write_typology_sheet(result, typ, order_seed=seed, prior_path=prior_typ)
     click.echo(f"wrote {n1} relevance rows -> {rel} (random target order, seed={seed})")
     click.echo(f"wrote {n2} typology rows  -> {typ} (random target order, seed={seed})")
-    if merge_dir:
-        click.echo(f"carried over hand labels + order from {merge_dir}; "
-                   "fill the new blank rows, then `python -m tpd eval`.")
-    else:
-        click.echo("Label the first ~50 targets by label_order, fill gold_*, then "
-                   "`python -m tpd eval`.")
 
 
 # --------------------------------------------------------------------------- #
@@ -276,70 +316,6 @@ def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
         labeled_docs=load_typology_gold_docs(typology_gold) if typology_gold else None,
     )
     click.echo(typology_agreement.summary)
-
-
-# --------------------------------------------------------------------------- #
-@cli.command(name="render")
-@click.option("--corpus", "corpus_root", required=True)
-@click.option("--targets", default="gold",
-              help="'gold', 'all', or a CSV of target ids")
-@click.option("--typology-gold", default="labels/typology_labels.csv",
-              help="sheet defining the gold set")
-@click.option("--roles", default=None,
-              help="roles to render")
-@click.option("--min-gain", type=int, default=2000,
-              help="only overwrite document when the render adds at least this many chars")
-@click.option("--timeout", type=int, default=30000, help="per-page render timeout (ms)")
-@click.option("--limit", type=int, default=0, help="cap number of docs rendered (0 = no cap)")
-def render_cmd(corpus_root, targets, typology_gold, roles, min_gain, timeout, limit) -> None:
-    """Re-fetch JS-prone documents with headless Chromium."""
-    from .collect.render import Renderer
-
-    corpus = Corpus(corpus_root)
-    role_set = (
-        {r.strip() for r in roles.split(",") if r.strip()} if roles else _JS_PRONE_ROLES
-    )
-    if targets == "all":
-        tids = corpus.list_targets()
-    elif targets == "gold":
-        tids = sorted(load_typology_gold_docs(typology_gold)) if Path(typology_gold).exists() else []
-    else:
-        tids = [t.strip() for t in targets.split(",") if t.strip()]
-    if not tids:
-        click.echo("no targets selected.")
-        return
-
-    rendered = updated = failed = 0
-    with Renderer(timeout_ms=timeout) as r:
-        if not r.available:
-            click.echo("Playwright/browser unavailable.")
-            return
-        for tid in tids:
-            target, docs = corpus.read_manifest(tid)
-            changed = False
-            for d in docs:
-                if d.role not in role_set or not d.url:
-                    continue
-                if limit and rendered >= limit:
-                    break
-                rendered += 1
-                html = r.render(d.url)
-                if not html:
-                    failed += 1
-                    continue
-                old = corpus.read_doc_html(d) if d.raw_path else ""
-                if len(html) >= len(old) + min_gain:
-                    corpus.save_doc(tid, d, html)
-                    d.http_status = d.http_status or 200
-                    d.error = ""
-                    d.fetched_at = __import__("time").time()
-                    updated += 1
-                    changed = True
-            if changed:
-                corpus.write_manifest(target, docs)
-            click.echo(f"  {tid}: rendered, {updated} doc(s) updated so far", err=True)
-    click.echo(f"rendered {rendered} docs across {len(tids)} targets; "
-               f"updated {updated}, failed {failed}.")
 
 
 # --------------------------------------------------------------------------- #

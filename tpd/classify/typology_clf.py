@@ -92,7 +92,7 @@ def classify_document(
     )
     facets = {facet_code(doc_class.medium, s) for s in scan.specificities}
 
-    out.facets = sort_facets(facets)
+    out.facets = facets
     out.named_orgs = scan.named_orgs
     out.org_typing = scan.org_typing
     out.category_terms = scan.category_terms
@@ -140,7 +140,7 @@ def assemble_target(
                 d.evidence = "store-listing data-safety card (mirrors play_data_safety)"
                 union |= set(d.facets)
 
-    tc.facets = sort_facets(union)
+    tc.facets = union
     # TODO refactor
     decisive = any(dc.decisive for dc in tc.docs)
     pending = any(dc.needs_review for dc in tc.docs)

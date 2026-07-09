@@ -108,7 +108,7 @@ class AgreementReport:
             f"[{'PASS' if self.coverage_passed else 'FAIL'}]; "
         )
         if not self.n_gold:
-            return head + "agreement: awaiting hand-labels."
+            return head + "agreement."
         return head + (
             f"agreement={_pct(self.exact_agreement)} on {self.n_gold} gold "
             f"(mean Jaccard={_pct(self.mean_jaccard)}) "
@@ -132,9 +132,9 @@ def agreement(
     result: CorpusResult,
     gold: dict[str, set],
     labeled_docs: dict[str, set] | None = None,
-) -> Goal3Report:
+) -> AgreementReport:
     """Coverage + agreement calculation."""
-    c, n, coverage = coverage(result)
+    c, n, cov = coverage(result)
     if labeled_docs:
         by_id = {
             tc.target_id: {
@@ -162,14 +162,14 @@ def agreement(
 
     exact_agree = exact / n_gold if n_gold else 0.0
     mean_jacc = statistics.mean(jaccards) if jaccards else 0.0
-    return Goal3Report(
+    return AgreementReport(
         n_targets=n,
         n_classified=c,
-        coverage=coverage,
+        coverage=cov,
         n_gold=n_gold,
         exact_agreement=exact_agree,
         mean_jaccard=mean_jacc,
-        coverage_passed=coverage >= TARGET_COVERAGE,
+        coverage_passed=cov >= TARGET_COVERAGE,
         agreement_passed=(exact_agree >= TARGET_AGREEMENT) if n_gold else False,
     )
 
