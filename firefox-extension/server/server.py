@@ -10,14 +10,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-# Allow `python server/server.py`
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_HERE = Path(__file__).resolve().parent
+_REPO_ROOT = _HERE.parent.parent
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_HERE))
 from analyze import analyze_url  # noqa: E402
 
 # Defaults
 CONFIG = {
-    "corpus_root": str(Path(__file__).resolve().parent.parent / "_cache_corpus"),
+    "corpus_root": str(_HERE.parent / "_cache_corpus"),
     "use_ner": True,
+    "use_poligraph": True,
     "delay": 0.2,
 }
 
@@ -50,6 +53,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             self._json(200, {"ok": True, "ner": CONFIG["use_ner"],
+                             "poligraph": CONFIG["use_poligraph"],
                              "corpus": CONFIG["corpus_root"]})
             return
         if parsed.path != "/analyze":
@@ -67,6 +71,7 @@ class Handler(BaseHTTPRequestHandler):
                 url,
                 corpus_root=CONFIG["corpus_root"],
                 use_ner=CONFIG["use_ner"],
+                use_poligraph=CONFIG["use_poligraph"],
                 force=force,
                 delay=CONFIG["delay"],
             )
@@ -89,17 +94,21 @@ def main() -> None:
                     help="per-origin result/fetch cache dir")
     ap.add_argument("--no-ner", action="store_true",
                     help="gazetteer-only (faster; lower named-org recall)")
+    ap.add_argument("--no-poligraph", action="store_true",
+                    help="skip PoliGraph sharing-relationship extraction")
     ap.add_argument("--delay", type=float, default=CONFIG["delay"],
                     help="polite per-request delay (s)")
     args = ap.parse_args()
 
     CONFIG["corpus_root"] = args.corpus
     CONFIG["use_ner"] = not args.no_ner
+    CONFIG["use_poligraph"] = not args.no_poligraph
     CONFIG["delay"] = args.delay
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"tpd extension bridge on http://{args.host}:{args.port}  "
-          f"(ner={CONFIG['use_ner']}, corpus={CONFIG['corpus_root']})")
+          f"(ner={CONFIG['use_ner']}, poligraph={CONFIG['use_poligraph']}, "
+          f"corpus={CONFIG['corpus_root']})")
     print("  GET /analyze?url=https://example.com   ·   Ctrl-C to stop")
     try:
         httpd.serve_forever()

@@ -50,3 +50,30 @@ def parse_facet(code: str) -> tuple[Medium, Specificity]:
 
 _VALID_MEDIA = {m.value for m in Medium}
 _VALID_SPEC = {s.value for s in Specificity}
+
+# Aliases accepted in hand-entered facet codes.
+_MEDIUM_ALIASES = {
+    "machine-readable": Medium.MACHINE_READABLE.value,
+    "machinereadable": Medium.MACHINE_READABLE.value,
+    "mr": Medium.MACHINE_READABLE.value,
+    "table": Medium.STRUCTURED.value,
+    "other": Medium.OTHER_DOC.value,
+    "other-doc": Medium.OTHER_DOC.value,
+}
+_SPEC_ALIASES = {
+    "org": Specificity.NAMED.value,
+    "name": Specificity.NAMED.value,
+    "categories": Specificity.CATEGORY.value,
+    "cat": Specificity.CATEGORY.value,
+    "unnamed": Specificity.GENERIC.value,
+}
+
+
+def media_of(facets: set[str]) -> set[Medium]:
+    """The set of media present in a facet set."""
+    media: set[Medium] = set()
+    for code in facets:
+        m = code.partition(":")[0]
+        if m in _VALID_MEDIA:
+            media.add(Medium(m))
+    return media

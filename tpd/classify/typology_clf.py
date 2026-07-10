@@ -8,7 +8,7 @@ from ..extract import Document
 from ..typology import Medium, facet_code
 from .document_class import DocClass, classify_medium
 from .specificity import SpecScan, specificities_in_doc
-from .structural import StructuralSignals, structural_signals
+from .structural import structural_signals
 
 # Minimum extracted text for a document to support a confident read.
 DECISIVE_MIN_TEXT = 1500

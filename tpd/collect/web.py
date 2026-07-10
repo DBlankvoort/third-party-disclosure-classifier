@@ -40,6 +40,17 @@ _COMPANION_ROLES = {
 }
 
 
+def _rank_policy_url(url: str) -> tuple:
+    """Sort key: the most policy-like of several discovered candidates first."""
+    path = urlparse(url).path.lower()
+    return (
+        "cookie" in path,
+        "settings" in path or "preference" in path or "choices" in path,
+        "privacy" not in path,
+        len(path),
+    )
+
+
 def _registrable(host: str) -> str:
     """Approximate registrable domain."""
     parts = host.lower().split(".")
@@ -115,7 +126,10 @@ def collect_website(
         discovered = _discover_links(home_res.text, home_res.final_url or home)
 
     # 2. privacy policy ----------------------------------------------------- #
-    policy_url = target.seed_policy_url or discovered.get("privacy_policy", "")
+    discovered_policies = discovered.get("privacy_policy") or []
+    policy_url = target.seed_policy_url or (
+        min(discovered_policies, key=_rank_policy_url) if discovered_policies else ""
+    )
     policy_doc = None
     if policy_url:
         policy_doc = _save(policy_url, "privacy_policy")
@@ -133,7 +147,8 @@ def collect_website(
         policy_html = corpus.read_doc_html(policy_doc)
         for role, urls in _discover_links(policy_html, policy_doc.url).items():
             for url in urls:
-                discovered.setdefault(role, url)
+                if url not in discovered.setdefault(role, []):
+                    discovered[role].append(url)
 
     # 4. fetch discovered companion docs ------------------------------------ #
     seen_urls = {d.url for d in docs}

@@ -33,43 +33,68 @@
         <span id="source-pill" class="pill subtle"></span>
       </div>
 
-      <!-- (1) WHERE -->
-      <h2 class="section-title">Where disclosures were found</h2>
-      <ul id="docs" class="docs"></ul>
-      <p id="docs-empty" class="empty" hidden>
-        No recognised disclosure document was found at this origin.
-      </p>
+      <div class="columns">
+        <div class="col">
+          <h2 class="section-title">Where disclosures were found</h2>
+          <ul id="docs" class="docs"></ul>
+          <p id="docs-empty" class="empty" hidden>
+            No recognised disclosure document was found at this origin.
+          </p>
 
-      <!-- (2) WHAT, in aggregate -->
-      <h2 class="section-title">What they disclose, in aggregate</h2>
-      <div class="matrix-wrap">
-        <table id="matrix" class="matrix" aria-label="Disclosure medium by specificity">
-          <thead>
-            <tr>
-              <th class="corner"></th>
-              <th>named</th><th>category</th><th>generic</th>
-            </tr>
-          </thead>
-          <tbody><!-- rows injected per medium --></tbody>
-        </table>
+          <h2 class="section-title">What they disclose, in aggregate</h2>
+          <div class="matrix-wrap">
+            <table id="matrix" class="matrix" aria-label="Disclosure medium by specificity">
+              <thead>
+                <tr>
+                  <th class="corner"></th>
+                  <th>named</th><th>category</th><th>generic</th>
+                </tr>
+              </thead>
+              <tbody><!-- rows injected per medium --></tbody>
+            </table>
+          </div>
+
+          <h2 class="section-title">Who receives what</h2>
+          <ul id="relations" class="relations"></ul>
+          <p id="relations-empty" class="empty" hidden>
+            No structural sharing relationships could be extracted.
+          </p>
+          <p id="relations-off" class="empty" hidden>
+            PoliGraph analysis is disabled on the local bridge.
+          </p>
+          <details id="firstparty-box" class="rollup" hidden>
+            <summary>First-party collection <span id="firstparty-count" class="count">0</span></summary>
+            <div id="firstparty" class="taglist"></div>
+          </details>
+
+          <details id="orgs-box" class="rollup">
+            <summary>Named organisations <span id="orgs-count" class="count">0</span></summary>
+            <div id="orgs" class="taglist"></div>
+          </details>
+          <details id="cats-box" class="rollup">
+            <summary>Role / categories disclosed <span id="cats-count" class="count">0</span></summary>
+            <div id="cats" class="taglist"></div>
+          </details>
+        </div>
+
+        <div class="col">
+          <h2 class="section-title">Sharing graph</h2>
+          <div id="graph-wrap" class="graph-wrap">
+            <svg id="graph" role="img" aria-label="Data-sharing graph"></svg>
+          </div>
+          <p id="graph-empty" class="empty" hidden>No relations to draw.</p>
+          <div class="graph-legend" id="graph-legend"></div>
+
+          <h2 class="section-title">Your rights</h2>
+          <div id="rights" class="rights"></div>
+        </div>
       </div>
-
-      <details id="orgs-box" class="rollup">
-        <summary>Named organisations <span id="orgs-count" class="count">0</span></summary>
-        <div id="orgs" class="taglist"></div>
-      </details>
-      <details id="cats-box" class="rollup">
-        <summary>Role / categories disclosed <span id="cats-count" class="count">0</span></summary>
-        <div id="cats" class="taglist"></div>
-      </details>
     </section>
 
-    <!-- Server-not-running help -->
     <section id="offline" class="offline" hidden>
       <p><strong>Local analyzer not reachable.</strong></p>
       <p>Start the bridge, then re-open this popup:</p>
-      <pre>cd firefox-extension
-python server/server.py</pre>
+      <pre>python firefox-extension/server/server.py</pre>
     </section>
   </main>
 

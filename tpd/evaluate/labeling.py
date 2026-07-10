@@ -135,7 +135,6 @@ def load_typology_gold(path: str | Path) -> dict[str, set]:
     """Load typology gold rows."""
     agg: dict[str, set] = {}
     touched: set[str] = set()
-    notes: list[str] = []
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             tid = row.get("target_id") or ""
@@ -148,16 +147,7 @@ def load_typology_gold(path: str | Path) -> dict[str, set]:
                 code = code.strip()
                 if not code or code.lower() == "none":
                     continue
-                canon, note = canon_facet_code(code)
-                if note:
-                    notes.append(f"{tid}/{row.get('doc_id','')}: {note}")
-                if canon:
-                    facets.add(canon)
-    if notes:
-        print(f"[gold] canonicalised {len(notes)} malformed gold facet code(s):",
-              file=sys.stderr)
-        for n in notes:
-            print(f"[gold]   {n}", file=sys.stderr)
+                facets.add(code)
     return {tid: agg.get(tid, set()) for tid in touched}
 
 

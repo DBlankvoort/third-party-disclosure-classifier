@@ -6,7 +6,7 @@ import csv
 import time
 import random
 from collections import OrderedDict
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 import sys
@@ -21,7 +21,6 @@ from .appstore import collect_app_store_app
 from .playstore import collect_play_app
 from .web import (
     COMMON_COMPANION_PATHS,
-    _COMPANION_ROLES,
     collect_website,
     _content_key,
     _discover_links,
@@ -162,11 +161,12 @@ def collect_stratified(
     out: dict[str, list[CollectedDoc]] = {}
 
     def _safe(t: Target) -> tuple[Target, list[CollectedDoc]]:
-        return t, fetch_target(t, corpus, force=force, delay=delay)
-        #except Exception as exc:  # noqa: BLE001
-        #    if progress:
-        #        progress(t, f"ERROR {exc}")
-        #    return t, []
+        try:
+            return t, fetch_target(t, corpus, force=force, delay=delay)
+        except Exception as exc:  # noqa: BLE001
+            if progress:
+                progress(t, f"ERROR {exc}")
+            return t, []
 
     for ttype, candidates in group_by_type(seeds).items():
         pool = candidates[:]

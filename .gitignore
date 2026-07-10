@@ -2,6 +2,8 @@
 /corpus
 /out
 /labels
+_cache_corpus/
+poligraph/
 
 __pycache__/
 *.pyc

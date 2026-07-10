@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import requests
@@ -88,7 +88,7 @@ class Corpus:
 
     def save_doc(self, target_id: str, doc: CollectedDoc, html: str) -> CollectedDoc:
         """Save document `doc` as part of the specified document set `target_id`."""
-        d = self.target_dir(target_id)
+        self.target_dir(target_id)
         rel = f"{target_id}/docs/{doc.doc_id}.html"
         (self.root / rel).write_text(html, encoding="utf-8")
         doc.raw_path = rel # Overwrites if `save_doc` is called for the same doc with different `target_id`s
