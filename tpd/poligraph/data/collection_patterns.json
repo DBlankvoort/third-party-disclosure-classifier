@@ -26,6 +26,5 @@
       "recipient_action": null
     }
   },
-  "recipient_preps": ["with", "to"],
-  "negation_words": ["not", "never", "no", "neither", "nor", "without", "n't"]
+  "recipient_preps": ["with", "to"]
 }

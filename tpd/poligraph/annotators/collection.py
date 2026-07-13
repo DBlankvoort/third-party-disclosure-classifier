@@ -7,6 +7,7 @@ from functools import lru_cache
 from importlib import resources
 from typing import Optional
 
+from ...lexicons import is_negated
 from ..graph import Action
 from ..phrase_graph import PhraseEdge
 from .base import Annotator, AnnotatorContext, ParsedSentence
@@ -32,7 +33,6 @@ class CollectionAnnotator(Annotator):
 
     def annotate(self, ctx: AnnotatorContext) -> None:
         verb2group = _verb2group()
-        neg_words = set(_patterns()["negation_words"])
         recip_preps = set(_patterns()["recipient_preps"])
 
         for parsed in ctx.sentences:
@@ -44,7 +44,7 @@ class CollectionAnnotator(Annotator):
                 if lemma not in verb2group:
                     continue
                 gname, subj_action, recip_action = verb2group[lemma]
-                negative = self._is_negated(token, neg_words)
+                negative = is_negated(doc.text, token.idx)
                 if self._is_interrogative(doc):
                     continue
 
@@ -103,21 +103,6 @@ class CollectionAnnotator(Annotator):
             if tok.lemma_.lower() in self._CHILD_WORDS:
                 return "child"
         return "general user"
-
-    @staticmethod
-    def _is_negated(verb, neg_words) -> bool:
-        for child in verb.children:
-            if child.dep_ == "neg":
-                return True
-            if child.lower_ in neg_words:
-                return True
-        # auxiliary "do not", "will never", "cannot"
-        for child in verb.children:
-            if child.dep_ in ("aux", "auxpass"):
-                for g in child.children:
-                    if g.lower_ in neg_words or g.dep_ == "neg":
-                        return True
-        return False
 
     @staticmethod
     def _is_interrogative(doc) -> bool:

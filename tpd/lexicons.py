@@ -369,24 +369,28 @@ _SELF_RECIPIENT_RE = re.compile(r"^\s*(?:(?:to|with)\s+)?(?:you|us)\b", re.I)
 # --------------------------------------------------------------------------- #
 # Affirmations/negations
 # --------------------------------------------------------------------------- #
+def is_negated(text: str, pos: int) -> bool:
+    """True iff a non-excepted negation cue precedes ``pos`` in ``text``."""
+    pre = text[max(0, pos - _NEG_WINDOW):pos]
+    cut = max(pre.rfind(". "), pre.rfind("; "), pre.rfind("! "), pre.rfind("? "),
+              pre.rfind(": "))
+    clause_cut = max((cb.end() for cb in _CLAUSE_BOUND_RE.finditer(pre)), default=-1)
+    cut = max(cut, clause_cut - 1)
+    if cut != -1:
+        pre = pre[cut + 1:]
+    if not NEGATION_RE.search(pre):
+        return False
+    post = text[pos:pos + _EXC_WINDOW]
+    return not EXCEPTION_RE.search(post)
+
+
 def _affirmative(segment: str, verb_re: re.Pattern) -> bool:
     """True iff a segment has a non-negated verb."""
     for m in verb_re.finditer(segment):
         if _SELF_RECIPIENT_RE.match(segment[m.end():]):
             continue
-        pre = segment[max(0, m.start() - _NEG_WINDOW):m.start()]
-        cut = max(pre.rfind(". "), pre.rfind("; "), pre.rfind("! "), pre.rfind("? "),
-                  pre.rfind(": "))
-        clause_cut = max((cb.end() for cb in _CLAUSE_BOUND_RE.finditer(pre)), default=-1)
-        cut = max(cut, clause_cut - 1)
-        if cut != -1:
-            pre = pre[cut + 1:]
-        if NEGATION_RE.search(pre):
-            post = segment[m.end():m.end() + _EXC_WINDOW]
-            if EXCEPTION_RE.search(post):
-                return True
-            continue
-        return True
+        if not is_negated(segment, m.start()):
+            return True
     return False
 
 
