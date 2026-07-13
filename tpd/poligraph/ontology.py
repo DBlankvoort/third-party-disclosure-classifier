@@ -57,13 +57,6 @@ class Ontology:
     def leaves(self) -> list[str]:
         return [n for n in self.g if self.g.out_degree(n) == 0]
 
-    def categorize(self, term: str) -> set[str]:
-        """Return the summary categories a term belongs to."""
-        term = term.strip().lower()
-        if term not in self.g:
-            return set()
-        return {c for c in self.summary_categories if c in self.ancestors(term)}
-
     def define(self, term: str) -> Optional[str]:
         return self.definitions.get(term.strip().lower())
 
@@ -114,16 +107,6 @@ class EntityOntology(Ontology):
                     )
                 g.add_edge(label, member)
         return cls(g, summary)
-
-    def category_of(self, entity: str) -> Optional[str]:
-        """The service-type category of a concrete entity, if known."""
-        entity = entity.strip().lower()
-        if entity in self.summary_categories:
-            return entity
-        for cat in self.summary_categories:
-            if self.subsumes(cat, entity):
-                return cat
-        return None
 
 
 class LocalOntology(Ontology):

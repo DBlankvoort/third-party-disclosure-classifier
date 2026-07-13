@@ -387,11 +387,3 @@ def specificities_in_doc(
             if not scan.evidence:
                 scan.evidence = f"embedded vendor table names {len(table_orgs)} org(s)"
     return scan
-
-
-def positive_disclosure_present(doc: Document) -> bool:
-    """Cheap check: does any segment make a sharing / third-party-collection claim?"""
-    for seg in doc.segments[:MAX_SEGMENTS]:
-        if positive_sharing(seg) or third_party_collects(seg):
-            return True
-    return False

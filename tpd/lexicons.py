@@ -69,14 +69,6 @@ EXEMPLIFIER_RE = re.compile(
     r"e\.?g\.?|like|for instance|namely|(?:most )?notably|specifically)\b",
     re.I,
 )
-COMPLETENESS_RE = re.compile(
-    r"\b(the following|as follows|are as follows|complete list of|"
-    r"full list of|all of our|these are all|listed below|our (?:current )?"
-    r"(?:partners?|sub[- ]?processors?|vendors?|providers?) (?:are|include)|"
-    r"consists? of|comprise[ds]? of)\b",
-    re.I,
-)
-
 # --------------------------------------------------------------------------- #
 # External pointer cues
 # --------------------------------------------------------------------------- #
@@ -182,8 +174,11 @@ MACHINE_READABLE_ROLES = frozenset(
     {"ads_txt", "app_ads_txt", "sellers_json", "vendors_json", "tcf_gvl"}
 )
 
-_ADS_TXT_VENDOR_RE = re.compile(
-    r"^\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*,\s*[^,]+,\s*(?:DIRECT|RESELLER)\b",
+# An ads.txt / app-ads.txt data row, capturing the domain (group 1) and the
+# DIRECT/RESELLER relationship (group 2). Shared with
+# classify.structured_relations, which needs the relationship too.
+ADS_TXT_ROW_RE = re.compile(
+    r"^\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*,\s*[^,]+,\s*(DIRECT|RESELLER)\b",
     re.I | re.M,
 )
 _JSON_DOMAIN_RE = re.compile(r'"domain"\s*:\s*"([^"]+)"', re.I)
@@ -207,7 +202,7 @@ def registry_named_orgs(text: str, kind: str, cap: int = 200) -> list[str]:
             out.append(v)
 
     if kind == "ads_txt":
-        for m in _ADS_TXT_VENDOR_RE.finditer(text):
+        for m in ADS_TXT_ROW_RE.finditer(text):
             add(m.group(1).lower())
             if len(seen) >= cap:
                 break

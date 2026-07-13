@@ -60,10 +60,7 @@ def annotate(main_probs: List[float], segment_text: str) -> Dict[str, object]:
     """Flatten the Main-attribute probabilities into boolean annotation keys."""
     return {
         "segment_text": segment_text,
-        # Main (segment classifier) — only the three used columns
-        "main_first": _present(main_probs, 0),
         "main_third": _present(main_probs, 1),
-        "main_audience": _present(main_probs, 5),
     }
 
 

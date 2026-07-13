@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import random
-import sys
 from pathlib import Path
 
 from ..classify.run import CorpusResult

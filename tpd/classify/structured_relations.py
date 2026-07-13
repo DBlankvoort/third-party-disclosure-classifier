@@ -8,7 +8,7 @@ import re
 from bs4 import BeautifulSoup
 
 from ..extract import _COOKIE_TABLE_RE, _VENDOR_COL_RE, _clean, _table_headers_and_rows
-from ..lexicons import MACHINE_READABLE_ROLES, machine_readable_kind
+from ..lexicons import ADS_TXT_ROW_RE, MACHINE_READABLE_ROLES, machine_readable_kind
 from ..poligraph.purpose import match_purpose_tags
 from .named_entities import _is_first_party
 
@@ -59,16 +59,10 @@ def _relation(
 # --------------------------------------------------------------------------- #
 # Machine-readable registries
 # --------------------------------------------------------------------------- #
-_ADS_TXT_ROW_RE = re.compile(
-    r"^\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*,\s*[^,]+,\s*(DIRECT|RESELLER)\b",
-    re.I | re.M,
-)
-
-
 def _ads_txt_relations(raw: str, doc_id: str) -> list[dict]:
     """One edge per ads.txt / app-ads.txt row."""
     out: dict[str, dict] = {}
-    for m in _ADS_TXT_ROW_RE.finditer(raw or ""):
+    for m in ADS_TXT_ROW_RE.finditer(raw or ""):
         domain, kind = m.group(1).lower(), m.group(2).lower()
         if domain in out:
             if kind == "direct":
