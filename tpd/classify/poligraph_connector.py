@@ -25,7 +25,7 @@ def poligraph_available() -> bool:
     if _IMPORT_ERROR is not None:
         return False
     try:
-        import poligraph.graph  # noqa: F401
+        from ..poligraph import graph  # noqa: F401
         return True
     except Exception as exc:  # noqa: BLE001
         _IMPORT_ERROR = str(exc)
@@ -36,7 +36,7 @@ def _grapher():
     """Lazily build the PoliGrapher singleton."""
     global _GRAPHER
     if _GRAPHER is None:
-        from poligraph.poligrapher import PoliGrapher
+        from ..poligraph.poligrapher import PoliGrapher
 
         _GRAPHER = PoliGrapher()
     return _GRAPHER
@@ -54,7 +54,7 @@ def graphs_for_target(
     force: bool = False,
 ) -> dict[str, "object"]:
     """Build PoliGraphs for a target's narrative documents."""
-    from poligraph.graph import PoliGraph
+    from ..poligraph.graph import PoliGraph
 
     cache_path = Path(corpus.root) / target_id / CACHE_NAME
     cache: dict[str, dict] = {}
@@ -92,7 +92,7 @@ def graphs_for_target(
 
 
 def _is_first_party_entity(entity: str, first_party: set[str] | None) -> bool:
-    from poligraph.graph import FIRST_PARTY
+    from ..poligraph.graph import FIRST_PARTY
 
     if entity == FIRST_PARTY:
         return True
@@ -104,7 +104,7 @@ def _is_first_party_entity(entity: str, first_party: set[str] | None) -> bool:
 
 def _named_examples(graph, entity: str, limit: int = 5) -> list[str]:
     """Concrete entities the graph says the entity subsumes."""
-    from poligraph.graph import FIRST_PARTY, NodeType, UNSPECIFIED_ACTOR
+    from ..poligraph.graph import FIRST_PARTY, NodeType, UNSPECIFIED_ACTOR
 
     out = [
         n for n in graph.descendants(entity)
@@ -120,7 +120,7 @@ def relations_from_graph(
     doc_id: str = "",
 ) -> list[dict]:
     """Flatten a PoliGraph's COLLECT / NOT_COLLECT edges into relation dicts."""
-    from poligraph.graph import EdgeType, UNSPECIFIED_ACTOR
+    from ..poligraph.graph import EdgeType, UNSPECIFIED_ACTOR
 
     relations: list[dict] = []
     for e in graph.collect_edges(include_negative=True):
