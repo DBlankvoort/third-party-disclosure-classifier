@@ -7,7 +7,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-from ..extract import _COOKIE_TABLE_RE, _VENDOR_COL_RE, _clean
+from ..extract import _COOKIE_TABLE_RE, _VENDOR_COL_RE, _clean, _table_headers_and_rows
 from ..lexicons import MACHINE_READABLE_ROLES, machine_readable_kind
 from .named_entities import _is_first_party
 
@@ -183,18 +183,6 @@ def _clean_entity_cell(v: str) -> str:
     return v
 
 
-def _table_rows(tbl) -> tuple[list[str], list[list[str]]]:
-    rows = tbl.find_all("tr")
-    if len(rows) < 2:
-        return [], []
-    headers = [_clean(c.get_text(" ")).lower() for c in rows[0].find_all(["td", "th"])]
-    body = [
-        [_clean(c.get_text(" ")) for c in r.find_all(["td", "th"])]
-        for r in rows[1:]
-    ]
-    return headers, body
-
-
 def table_relations(
     raw_html: str,
     role: str = "",
@@ -207,9 +195,10 @@ def table_relations(
     soup = BeautifulSoup(raw_html, "lxml")
     out: dict[str, dict] = {}
     for tbl in soup.find_all("table"):
-        headers, body = _table_rows(tbl)
-        if not headers or not body:
+        header_row, body = _table_headers_and_rows(tbl)
+        if not header_row or not body:
             continue
+        headers = [h.lower() for h in header_row]
         ent_idx = next(
             (i for i, h in enumerate(headers) if h and _ENTITY_COL_RE.search(h)), None
         )

@@ -85,17 +85,32 @@ def _clean(s: str) -> str:
     return s.strip()
 
 
+def _table_headers_and_rows(tbl) -> tuple[list[str], list[list[str]]]:
+    """Split an HTML <table> tag into its (raw, un-lower-cased) header cells and
+    cleaned body rows. Shared by every table-walking consumer so the tr/td/th
+    traversal and cell cleaning live in exactly one place."""
+    rows = tbl.find_all("tr")
+    if not rows:
+        return [], []
+    header_row = [_clean(c.get_text(" ")) for c in rows[0].find_all(["td", "th"])]
+    body = [
+        [_clean(c.get_text(" ")) for c in r.find_all(["td", "th"])]
+        for r in rows[1:]
+    ]
+    return header_row, body
+
+
 def _extract_tables(soup: BeautifulSoup) -> list[Table]:
     tables: list[Table] = []
     for tbl in soup.find_all("table"):
-        rows = tbl.find_all("tr")
-        if not rows:
+        header_row, body = _table_headers_and_rows(tbl)
+        if not header_row and not body:
             continue
-        # header: first row's th, else first row's td
-        first = rows[0]
-        headers = [_clean(c.get_text(" ")).lower() for c in first.find_all(["td", "th"])]
-        cells = [_clean(c.get_text(" ")) for c in tbl.find_all(["td", "th"])]
-        n_cols = max((len(r.find_all(["td", "th"])) for r in rows), default=0)
+        headers = [h.lower() for h in header_row]
+        n_rows = 1 + len(body)
+        n_cols = max([len(header_row)] + [len(r) for r in body], default=0)
+        all_cells = header_row + [c for row in body for c in row]
+        cell_text = " • ".join(c for c in all_cells if c)
 
         # Identify a vendor/name column and read its cells as the row entities.
         cookie_table = any(_COOKIE_TABLE_RE.search(h) for h in headers)
@@ -109,19 +124,18 @@ def _extract_tables(soup: BeautifulSoup) -> list[Table]:
             )
         name_cells: list[str] = []
         if name_idx is not None:
-            for r in rows[1:]:
-                rc = r.find_all(["td", "th"])
+            for rc in body:
                 if name_idx < len(rc):
-                    v = _clean(rc[name_idx].get_text(" "))
+                    v = rc[name_idx]
                     if v and not _IDENTIFIER_RE.search(v):
                         name_cells.append(v)
 
         tables.append(
             Table(
                 headers=[h for h in headers if h],
-                n_rows=len(rows),
+                n_rows=n_rows,
                 n_cols=n_cols,
-                cell_text=" • ".join(c for c in cells if c),
+                cell_text=cell_text,
                 name_cells=name_cells,
             )
         )
