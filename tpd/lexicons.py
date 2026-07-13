@@ -319,6 +319,11 @@ NEGATION_RE = re.compile(
 # How far back to look for a negator
 _NEG_WINDOW = 45
 
+# Contrastive conjunctions that close off a preceding negated clause
+_CLAUSE_BOUND_RE = re.compile(
+    r",\s*(?:but|however|yet|although|though|whereas)\b\s*", re.IGNORECASE
+)
+
 # Exception cues
 EXCEPTION_RE = re.compile(
     r"\b(unless|except|other than|save (?:as|where|for|that|to the extent)|"
@@ -372,6 +377,8 @@ def _affirmative(segment: str, verb_re: re.Pattern) -> bool:
         pre = segment[max(0, m.start() - _NEG_WINDOW):m.start()]
         cut = max(pre.rfind(". "), pre.rfind("; "), pre.rfind("! "), pre.rfind("? "),
                   pre.rfind(": "))
+        clause_cut = max((cb.end() for cb in _CLAUSE_BOUND_RE.finditer(pre)), default=-1)
+        cut = max(cut, clause_cut - 1)
         if cut != -1:
             pre = pre[cut + 1:]
         if NEGATION_RE.search(pre):
