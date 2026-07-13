@@ -125,6 +125,8 @@ class PoliGraph:
     ) -> None:
         """Add a COLLECT (or NOT_COLLECT) edge with purposes/action attributes."""
         entity, data_type = entity.strip().lower(), data_type.strip().lower()
+        self.add_entity(entity)
+        self.add_data(data_type, subject=subject)
         etype = EdgeType.NOT_COLLECT if negative else EdgeType.COLLECT
         key = f"{etype.value}:{action.value}:{subject}"
         if self.g.has_edge(entity, data_type, key):
@@ -134,8 +136,6 @@ class PoliGraph:
                             action=action, subject=subject, purposes=set(), text=set())
             attrs = self.g[entity][data_type][key]
         attrs["purposes"].update(purposes)
-        if subject != "general user":
-            self.g.nodes[data_type].setdefault("subjects", set()).add(subject)
         if text:
             attrs["text"].add(text)
 
