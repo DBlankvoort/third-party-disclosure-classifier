@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from tpd.collect.base import Corpus, Target
-from tpd.collect.runner import docset_usable, fetch_target
+from tpd.collect.runner import fetch_target
 from tpd.classify.named_entities import first_party_tokens
 from tpd.classify.poligraph_connector import (
     merge_relations,
@@ -119,6 +119,16 @@ def analyze_url(
     corpus = Corpus(corpus_root)
     target = _target_for(origin)
 
+    _html_cache: dict[str, str] = {}
+    _read_doc_html = corpus.read_doc_html
+
+    def _cached_read_doc_html(doc):
+        if doc.doc_id not in _html_cache:
+            _html_cache[doc.doc_id] = _read_doc_html(doc)
+        return _html_cache[doc.doc_id]
+
+    corpus.read_doc_html = _cached_read_doc_html
+
     manifest = corpus.root / target.id / "manifest.json"
     cached = manifest.exists() and not force
 
@@ -132,7 +142,7 @@ def analyze_url(
     tc = result.targets[0]
 
     _, raw_docs = corpus.read_manifest(target.id)
-    usable = docset_usable(corpus, target.type, raw_docs)
+    usable = any(d.medium for d in tc.docs)
     fetched = len(raw_docs)
     failed = [d.url for d in raw_docs if not d.ok]
 
