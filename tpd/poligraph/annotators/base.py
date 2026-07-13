@@ -57,6 +57,12 @@ class AnnotatorContext:
         self.graph.add_phrase(key, text, PhraseLabel.PURPOSE, parsed.sent_id)
         return key
 
+    def unspecified_actor_key(self, parsed: ParsedSentence) -> str:
+        """Generic "we do not sell your data"."""
+        key = f"{parsed.sent_id}:actor:unspecified"
+        self.graph.add_phrase(key, "third party", PhraseLabel.ENTITY, parsed.sent_id)
+        return key
+
 
 class Annotator:
     name = "annotator"

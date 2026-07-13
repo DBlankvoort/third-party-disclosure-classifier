@@ -79,6 +79,10 @@ class CollectionAnnotator(Annotator):
                         r_key = ctx.phrase_key(parsed, recip_span)
                         self._edge(ctx, r_key, d_key, etype, Action(recip_action),
                                    data_subject)
+                    elif recip_span is None and recip_action and negative:
+                        r_key = ctx.unspecified_actor_key(parsed)
+                        self._edge(ctx, r_key, d_key, etype, Action(recip_action),
+                                   data_subject)
 
     # ----------------------------------------------------------- helpers
     @staticmethod
