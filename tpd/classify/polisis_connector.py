@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from ..extract import Document
-from ..polisis.inference import DEFAULT_MODELS_ROOT, HierarchicalClassifier
+from ..polisis.inference import DEFAULT_MODELS_ROOT, ThirdPartyClassifier
 
 CACHE_NAME = "_polisis_thirdparty.json"
 
@@ -68,7 +68,7 @@ def build_cache(
         cache_path.write_text("{}", encoding="utf-8")
         return cache_path
 
-    clf = HierarchicalClassifier(models_root=models_root or DEFAULT_MODELS_ROOT)
+    clf = ThirdPartyClassifier(models_root=models_root or DEFAULT_MODELS_ROOT)
     out: dict[str, bool] = {}
     for h, segments in payload.items():
         verdict = False
