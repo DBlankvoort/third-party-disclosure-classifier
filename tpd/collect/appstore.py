@@ -78,10 +78,16 @@ def collect_app_store_app(
     policy_url = target.seed_policy_url
     if not policy_url and listing is not None:
         policy_url = _extract_policy_url(corpus.read_doc_html(listing), listing.url)
-    if not policy_url:
-        policy_url = seed_policy  # fall back to the developer/seller site
     if policy_url:
         _save(policy_url, "privacy_policy")
+    elif seed_policy:
+        seller_site = _save(seed_policy, "developer_site")
+        if seller_site is not None:
+            nested_policy_url = _extract_policy_url(
+                corpus.read_doc_html(seller_site), seller_site.url
+            )
+            if nested_policy_url:
+                _save(nested_policy_url, "privacy_policy")
 
     corpus.write_manifest(target, docs)
     return docs

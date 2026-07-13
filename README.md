@@ -8,8 +8,6 @@ This repository contains tooling for analysing the ways in which organisations d
 
 In this way, we seek to allow greater insight into the third-party data sharing behaviour of sites and give a structured overview which is more digestible than privacy policies.
 
-
-
 We provide the following information for a given URL:
 - The set of relevant documents which state something about third-party sharing.
 - How such documents are structured, and with what specificity third parties are disclosed.
@@ -17,8 +15,6 @@ We provide the following information for a given URL:
 - Which data sharing relationships are detected.
 - A graph-based visualization for such sharing relationships.
 - What rights actions are possible.
-
-
 
 For this work, we adapt code from:
 - [PolicyLint](https://github.com/benandow/PrivacyPolicyAnalysis)
@@ -42,8 +38,6 @@ Lastly, we evaluate our framework using data from:
 - [IAB Europe's Vendors list](https://iabeurope.eu/tcf-for-vendors/) for samples of data brokers.
 - [The MAPS Policies Dataset](https://usableprivacy.org/data/) for samples of Google Play Store apps.
 - [The Princeton-Leuven Longitudinal Corpus Crawler](https://privacypolicies.cs.princeton.edu/) for samples of websites.
-
-
 
 Additionally, we make use of Claude Code in the design and implementation of this project.
 
