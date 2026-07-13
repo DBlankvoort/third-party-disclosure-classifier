@@ -100,16 +100,22 @@ class SubsumptionAnnotator(Annotator):
 
     @staticmethod
     def _span_before(parsed, tok_index):
+        sent = parsed.doc[tok_index].sent
         best = None
         for sp in parsed.spans:
+            if sp.start < sent.start or sp.start >= sent.end:
+                continue
             if sp.end <= tok_index + 1 and (best is None or sp.end > best.end):
                 best = sp
         return best
 
     @staticmethod
     def _spans_after(parsed, tok_index, label, limit):
+        sent = parsed.doc[tok_index].sent if tok_index < len(parsed.doc) else None
         out = []
         for sp in sorted(parsed.spans, key=lambda s: s.start):
+            if sent is not None and (sp.start < sent.start or sp.start >= sent.end):
+                continue
             if sp.start >= tok_index and (label is None or sp.label == label):
                 out.append(sp)
                 if len(out) >= limit:
