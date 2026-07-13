@@ -9,23 +9,12 @@ from bs4 import BeautifulSoup
 
 from ..extract import _COOKIE_TABLE_RE, _VENDOR_COL_RE, _clean, _table_headers_and_rows
 from ..lexicons import MACHINE_READABLE_ROLES, machine_readable_kind
+from ..poligraph.purpose import match_purpose_tags
 from .named_entities import _is_first_party
 
 # --------------------------------------------------------------------------- #
 # Purpose mapping
 # --------------------------------------------------------------------------- #
-_PURPOSE_KEYWORDS = [
-    ("advertising", re.compile(
-        r"\bad(?:s|vert|vertis)|marketing|target|retarget|sponsor|campaign", re.I)),
-    ("analytics", re.compile(
-        r"analytic|statistic|measur|performance|research|audience|traffic", re.I)),
-    ("security", re.compile(r"security|fraud|abuse|bot detection", re.I)),
-    ("legal", re.compile(r"legal|compliance|consent record", re.I)),
-    ("services", re.compile(
-        r"necessary|essential|functional|function|preference|session|login|"
-        r"cart|hosting|infrastructure|cloud|payment|support|delivery|cdn", re.I)),
-]
-
 # IAB-TCF purpose mappings
 _TCF_PURPOSES = {
     1: "services",                     # store and/or access information
@@ -38,7 +27,7 @@ _TCF_PURPOSES = {
 
 def purposes_from_text(text: str) -> list[str]:
     """Map free purpose text to purpose tags."""
-    return sorted({tag for tag, pat in _PURPOSE_KEYWORDS if pat.search(text or "")})
+    return sorted(match_purpose_tags(text))
 
 
 def _relation(

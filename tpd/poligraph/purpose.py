@@ -17,6 +17,11 @@ def _keywords() -> dict[str, list[str]]:
     return {k: v for k, v in spec.items() if not k.startswith("_")}
 
 
+def match_purpose_tags(text: str) -> set[str]:
+    t = " " + (text or "").lower() + " "
+    return {cat for cat, cues in _keywords().items() if any(cue in t for cue in cues)}
+
+
 class PurposeClassifier:
     """Multi-label purpose classifier (keyword-based by default)."""
 
@@ -36,11 +41,7 @@ class PurposeClassifier:
         return self._classify_keywords(phrase)
 
     def _classify_keywords(self, phrase: str) -> set[Purpose]:
-        text = " " + phrase.lower() + " "
-        labels: set[Purpose] = set()
-        for cat, cues in _keywords().items():
-            if any(cue in text for cue in cues):
-                labels.add(Purpose(cat))
+        labels = {Purpose(cat) for cat in match_purpose_tags(phrase)}
         if not labels:
             labels.add(Purpose.OTHER)
         return labels
