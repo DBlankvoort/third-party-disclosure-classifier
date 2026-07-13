@@ -6,6 +6,8 @@ import hashlib
 import time
 from urllib.parse import urljoin, urlparse
 
+import tldextract
+
 from .. import lexicons
 from ..extract import parse_html
 from .base import CollectedDoc, Corpus, Target, fetch
@@ -50,11 +52,13 @@ def _rank_policy_url(url: str) -> tuple:
         len(path),
     )
 
+_TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=())
+
 
 def _registrable(host: str) -> str:
-    """Approximate registrable domain."""
-    parts = host.lower().split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+    """Registrable domain."""
+    ext = _TLD_EXTRACTOR(host)
+    return ext.top_domain_under_public_suffix or host.lower()
 
 
 def _same_site(url: str, *base_hosts: str) -> bool:
