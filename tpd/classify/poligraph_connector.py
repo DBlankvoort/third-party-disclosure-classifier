@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from pathlib import Path
 
 # Narrative roles worth structural sharing analysis.
@@ -93,13 +92,11 @@ def graphs_for_target(
 
 def _is_first_party_entity(entity: str, first_party: set[str] | None) -> bool:
     from ..poligraph.graph import FIRST_PARTY
+    from .named_entities import _is_first_party
 
     if entity == FIRST_PARTY:
         return True
-    if not first_party:
-        return False
-    toks = {t for t in re.split(r"[^a-z0-9]+", entity.lower()) if len(t) >= 4}
-    return bool(toks & first_party)
+    return _is_first_party(entity, first_party)
 
 
 def _named_examples(graph, entity: str, limit: int = 5) -> list[str]:
