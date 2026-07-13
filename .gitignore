@@ -7,3 +7,13 @@ _cache_corpus/
 
 __pycache__/
 *.pyc
+
+# Environments and tooling caches
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# Packaging artefacts
+build/
+dist/
+*.egg-info/

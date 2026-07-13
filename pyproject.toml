@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "third-party-disclosure-classifier"
+version = "1.0.0"
+description = "Collects privacy disclosures and classifies how they disclose third-party data sharing."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Dick Blankvoort", email = "dahblankvoort@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "click>=8.1",
+    "lxml>=5.0",
+    "networkx>=3.2",
+    "requests>=2.31",
+    "spacy>=3.7,<4",
+    "tldextract>=5.0",
+]
+
+[project.optional-dependencies]
+# Live collection of web targets.
+browser = ["playwright>=1.40"]
+# POLISIS classifier inference and the optional SetFit purpose model.
+ml = [
+    "torch>=2.2",
+    "transformers>=4.40,<5",
+    "setfit>=1.0",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+tpd = "tpd.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["tpd*"]
+
+[tool.setuptools.package-data]
+"tpd.poligraph.data" = ["*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "nlp: tests that need spaCy plus the en_core_web_sm model",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
