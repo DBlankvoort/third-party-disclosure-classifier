@@ -253,8 +253,6 @@ def table_relations(
                 entity, data_type, action, source=source,
                 purposes=purposes, text=purpose_text, doc_id=doc_id,
             )
-            if len(out) >= MAX_ENTITIES_PER_DOC:
-                return list(out.values())
     return list(out.values())
 
 
