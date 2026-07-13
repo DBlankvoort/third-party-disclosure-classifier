@@ -35,7 +35,7 @@ class RelevanceReport:
     @property
     def summary(self) -> str:
         return (
-            f"Relevance recall >= {_pct(TARGET_RECALL)}): "
+            f"Relevance recall >= {_pct(TARGET_RECALL)}: "
             f"recall={_pct(self.recall)} on {self.n_disclosing} disclosing docs "
             f"(precision={_pct(self.precision)}); "
             f"per-target all-found={_pct(self.target_recovery_rate)} "
@@ -103,12 +103,12 @@ class AgreementReport:
     def summary(self) -> str:
         head = (
             f"Coverage >= {_pct(TARGET_COVERAGE)}, agreement >= "
-            f"{_pct(TARGET_AGREEMENT)}): "
+            f"{_pct(TARGET_AGREEMENT)}: "
             f"coverage={_pct(self.coverage)} ({self.n_classified}/{self.n_targets}) "
             f"[{'PASS' if self.coverage_passed else 'FAIL'}]; "
         )
         if not self.n_gold:
-            return head + "agreement."
+            return head + "agreement=n/a"
         return head + (
             f"agreement={_pct(self.exact_agreement)} on {self.n_gold} gold "
             f"(mean Jaccard={_pct(self.mean_jaccard)}) "

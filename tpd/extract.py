@@ -48,7 +48,7 @@ _COOKIE_TABLE_RE = re.compile(
     re.I,
 )
 # Check for technical identifier.
-_IDENTIFIER_RE = re.compile(r"^[._]|[._].*[._]|_|^[A-Za-z]+\d|\d[A-Za-z]*$")
+_IDENTIFIER_RE = re.compile(r"^[._]|[._].*[._]|_|\d.*\d")
 
 
 @dataclass
