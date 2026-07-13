@@ -20,11 +20,16 @@ from .evaluate import (
     relevance,
     agreement,
     latency,
+    naming_rate,
+    policy_identification,
+    structured_list_identification,
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
+    load_presence_gold,
     write_relevance_sheet,
     write_typology_sheet,
+    APP_TARGET_TYPES,
 )
 
 # Fetch seed data
@@ -216,13 +221,17 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
 @click.option("--corpus", "corpus_root", required=True)
 @click.option("--relevance-gold", default=None, help="hand-labelled relevance sheet")
 @click.option("--typology-gold", default=None, help="hand-labelled typology sheet")
+@click.option("--pp-presence-gold", default=None,
+              help="sheet with a target_id + gold_pp_present column")
+@click.option("--list-presence-gold", default=None,
+              help="sheet with a target_id + gold_list_present column")
 @click.option("--no-ner", is_flag=True)
 @click.option("--polisis", is_flag=True)
 @click.option("--workers", type=int, default=8, show_default=True,
               help="documents classified in parallel per target")
 @click.option("--include-unusable", is_flag=True)
-def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
-          include_unusable) -> None:
+def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_presence_gold,
+          no_ner, polisis, workers, include_unusable) -> None:
     """Score key metrics."""
     corpus = Corpus(corpus_root)
     cache = None
@@ -230,8 +239,9 @@ def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
         from .classify.polisis_connector import load_cache
 
         cache = load_cache(corpus_root)
+    ids = _eval_ids(corpus, include_unusable)
     result = classify_corpus(corpus, use_ner=not no_ner, cache=cache,
-                             target_ids=_eval_ids(corpus, include_unusable), workers=workers)
+                             target_ids=ids, workers=workers)
 
     click.echo(latency(result).summary)
 
@@ -248,6 +258,20 @@ def eval_(corpus_root, relevance_gold, typology_gold, no_ner, polisis, workers,
         labeled_docs=load_typology_gold_docs(typology_gold) if typology_gold else None,
     )
     click.echo(typology_agreement.summary)
+
+    # Fetching-documents KPIs (project-goals/KPI.md #8-#13).
+    click.echo("")
+    for report in naming_rate(result).values():
+        click.echo(report.summary)
+
+    pp_gold = load_presence_gold(pp_presence_gold, "gold_pp_present") if pp_presence_gold else {}
+    list_gold = load_presence_gold(list_presence_gold, "gold_list_present") if list_presence_gold else {}
+    ids_by_group = {"website": [], "app": []}
+    for tc in result.targets:
+        ids_by_group["app" if tc.target_type in APP_TARGET_TYPES else "website"].append(tc.target_id)
+    for group, group_ids in ids_by_group.items():
+        click.echo(policy_identification(corpus, pp_gold, group, target_ids=group_ids).summary)
+        click.echo(structured_list_identification(corpus, list_gold, group, target_ids=group_ids).summary)
 
 
 # --------------------------------------------------------------------------- #

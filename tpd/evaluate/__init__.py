@@ -1,6 +1,7 @@
 """Evaluation + hand-labelling."""
 
 from .labeling import (
+    load_presence_gold,
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
@@ -11,10 +12,16 @@ from .metrics import (
     RelevanceReport,
     AgreementReport,
     LatencyReport,
+    NamingReport,
+    IdentificationReport,
+    APP_TARGET_TYPES,
     relevance,
     agreement,
     coverage,
     latency,
+    naming_rate,
+    policy_identification,
+    structured_list_identification,
 )
 
 __all__ = [
@@ -23,11 +30,18 @@ __all__ = [
     "load_relevance_gold",
     "load_typology_gold",
     "load_typology_gold_docs",
+    "load_presence_gold",
     "RelevanceReport",
     "AgreementReport",
     "LatencyReport",
+    "NamingReport",
+    "IdentificationReport",
+    "APP_TARGET_TYPES",
     "relevance",
     "coverage",
     "agreement",
     "latency",
+    "naming_rate",
+    "policy_identification",
+    "structured_list_identification",
 ]

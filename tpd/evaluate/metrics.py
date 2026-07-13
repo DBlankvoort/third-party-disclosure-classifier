@@ -6,12 +6,25 @@ import statistics
 from dataclasses import dataclass
 
 from ..classify.run import CorpusResult
+from ..collect.base import Corpus
 
 # Key thresholds
 TARGET_RECALL = 0.90
 TARGET_COVERAGE = 0.90
 TARGET_AGREEMENT = 0.85
 LATENCY_SECONDS = 1.0
+TARGET_PP_ID_WEBSITE = 0.80
+TARGET_PP_ID_APP = 0.70
+TARGET_LIST_ID_WEBSITE = 0.75
+TARGET_LIST_ID_APP = 0.65
+TARGET_NAMING_WEBSITE = 0.50
+TARGET_NAMING_APP = 0.40
+
+APP_TARGET_TYPES = {"play_store_app", "app_store_app"}
+_STRUCTURED_LIST_ROLES = {
+    "vendor_list", "subprocessor_list", "sellers_json", "vendors_json",
+    "app_ads_txt", "ads_txt", "tcf_gvl",
+}
 
 
 def _pct(x: float) -> str:
@@ -237,3 +250,111 @@ def latency(result: CorpusResult) -> LatencyReport:
     )
     r.passed = r.target_max < LATENCY_SECONDS
     return r
+
+
+# --------------------------------------------------------------------------- #
+# Fetching documents
+# --------------------------------------------------------------------------- #
+@dataclass
+class NamingReport:
+    group: str = ""
+    n_docs: int = 0
+    n_named: int = 0
+    rate: float = 0.0
+    target: float = 0.0
+    passed: bool = False
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"{self.group} docs naming a third party >= {_pct(self.target)}: "
+            f"rate={_pct(self.rate)} ({self.n_named}/{self.n_docs}) "
+            f"-> {'PASS' if self.passed else 'FAIL'}"
+        )
+
+
+def naming_rate(result: CorpusResult) -> dict[str, NamingReport]:
+    """Fraction of fetched documents naming a third party, by target group."""
+    groups = {
+        "website": (lambda t: t not in APP_TARGET_TYPES, TARGET_NAMING_WEBSITE),
+        "app": (lambda t: t in APP_TARGET_TYPES, TARGET_NAMING_APP),
+    }
+    out: dict[str, NamingReport] = {}
+    for name, (in_group, target) in groups.items():
+        docs = [d for tc in result.targets if in_group(tc.target_type) for d in tc.docs]
+        n = len(docs)
+        named = sum(1 for d in docs if d.named_orgs)
+        rate = named / n if n else 0.0
+        out[name] = NamingReport(
+            group=name, n_docs=n, n_named=named, rate=rate,
+            target=target, passed=rate >= target,
+        )
+    return out
+
+@dataclass
+class IdentificationReport:
+    kind: str = ""    # "privacy_policy" / "structured_list"
+    group: str = ""   # "website" / "app"
+    n_present: int = 0
+    n_identified: int = 0
+    rate: float = 0.0
+    target: float = 0.0
+    passed: bool = False
+
+    @property
+    def summary(self) -> str:
+        if not self.n_present:
+            return f"{self.group} {self.kind} identification: n/a (no gold)"
+        return (
+            f"{self.group} {self.kind} identified >= {_pct(self.target)} when present: "
+            f"rate={_pct(self.rate)} ({self.n_identified}/{self.n_present}) "
+            f"-> {'PASS' if self.passed else 'FAIL'}"
+        )
+
+
+def _identification_counts(
+    corpus: Corpus, gold: dict[str, bool], roles: set[str],
+    target_ids: list[str] | None = None,
+) -> tuple[int, int]:
+    ids = target_ids if target_ids is not None else corpus.list_targets()
+    present = identified = 0
+    for tid in ids:
+        if not gold.get(tid):
+            continue
+        present += 1
+        _, docs = corpus.read_manifest(tid)
+        if any(d.role in roles and d.ok for d in docs):
+            identified += 1
+    return identified, present
+
+
+def policy_identification(
+    corpus: Corpus, gold: dict[str, bool], group: str,
+    target_ids: list[str] | None = None,
+) -> IdentificationReport:
+    """Whether a fetched privacy policy was found for targets known to have one."""
+    identified, present = _identification_counts(
+        corpus, gold, {"privacy_policy"}, target_ids
+    )
+    target = TARGET_PP_ID_WEBSITE if group == "website" else TARGET_PP_ID_APP
+    rate = identified / present if present else 0.0
+    return IdentificationReport(
+        kind="privacy_policy", group=group, n_present=present, n_identified=identified,
+        rate=rate, target=target, passed=(rate >= target) if present else False,
+    )
+
+
+def structured_list_identification(
+    corpus: Corpus, gold: dict[str, bool], group: str,
+    target_ids: list[str] | None = None,
+) -> IdentificationReport:
+    """Whether a fetched structured third-party list was found for targets known to have one."""
+    identified, present = _identification_counts(
+        corpus, gold, _STRUCTURED_LIST_ROLES, target_ids
+    )
+    target = TARGET_LIST_ID_WEBSITE if group == "website" else TARGET_LIST_ID_APP
+    rate = identified / present if present else 0.0
+    return IdentificationReport(
+        kind="structured_list", group=group, n_present=present, n_identified=identified,
+        rate=rate, target=target, passed=(rate >= target) if present else False,
+    )

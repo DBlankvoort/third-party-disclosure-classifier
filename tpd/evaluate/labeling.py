@@ -150,6 +150,22 @@ def load_typology_gold(path: str | Path) -> dict[str, set]:
     return {tid: agg.get(tid, set()) for tid in touched}
 
 
+def load_presence_gold(path: str | Path, column: str) -> dict[str, bool]:
+    """Load a target-level presence gold column (e.g. "does a PP exist at all").
+
+    Expects a sheet with a `target_id` column and a boolean-ish `column`
+    (any of "1"/"true"/"yes", case-insensitive).
+    """
+    gold: dict[str, bool] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tid = row.get("target_id") or ""
+            v = (row.get(column) or "").strip().lower()
+            if tid and v:
+                gold[tid] = v in ("1", "true", "yes")
+    return gold
+
+
 def load_typology_gold_docs(path: str | Path) -> dict[str, set]:
     """Load docs for which typology gold exists."""
     docs: dict[str, set] = {}
