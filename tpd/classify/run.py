@@ -15,7 +15,6 @@ from .typology_clf import (
     TargetClassification,
     assemble_target,
     classify_document,
-    classify_target,
 )
 
 _MR_ROLES = {"ads_txt", "app_ads_txt", "sellers_json", "vendors_json", "tcf_gvl"}
@@ -102,17 +101,18 @@ def classify_corpus(
                     result.doc_seconds.append(secs)
                 tc = assemble_target(target.type, tid, [dc for dc, _ in doc_results])
             else:
-                parsed = []
+                doc_classifications = []
                 for d in ok_docs:
                     html = corpus.read_doc_html(d)
                     d0 = time.perf_counter()
                     doc = parse_html(html, max_bytes=_max_bytes_for_role(d.role))
-                    parsed.append((doc, d.role, d.doc_id, d.url))
+                    dc = classify_document(
+                        doc, role=d.role, target_type=target.type, doc_id=d.doc_id,
+                        url=d.url, ner_fn=ner_fn, backend=cache, first_party=first_party,
+                    )
                     result.doc_seconds.append(time.perf_counter() - d0)
-                tc = classify_target(
-                    target.type, parsed, target_id=tid, ner_fn=ner_fn, backend=cache,
-                    first_party=first_party,
-                )
+                    doc_classifications.append(dc)
+                tc = assemble_target(target.type, tid, doc_classifications)
 
             result.target_seconds.append(time.perf_counter() - t_start)
             result.targets.append(tc)

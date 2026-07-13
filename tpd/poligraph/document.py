@@ -52,6 +52,7 @@ class Sentence:
 
 _WS = re.compile(r"\s+")
 _BULLET = re.compile(r"^\s*(?:[-*•·▪◦‣]|\(?\d+[.)]|\(?[a-z][.)])\s+", re.I)
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _SKIP_TAGS = {"script", "style", "noscript", "nav", "footer", "aside", "header",
               "form", "button", "svg", "iframe"}
 
@@ -93,9 +94,14 @@ class DocumentTree:
                     continue
                 if _BULLET.match(line):
                     seg = Segment(SegType.LISTITEM, _BULLET.sub("", line), parent=root)
+                    root.children.append(seg)
                 else:
-                    seg = Segment(SegType.TEXT, line, parent=root)
-                root.children.append(seg)
+                    for sent in _SENT_SPLIT.split(line):
+                        sent = sent.strip()
+                        if sent:
+                            root.children.append(
+                                Segment(SegType.TEXT, sent, parent=root)
+                            )
         return cls(root)
 
     # ---------------------------------------------------------- traversal
@@ -198,7 +204,7 @@ class _TreeBuilder:
                 ))
                 if direct and child.name in ("p", "div", "td", "span"):
                     parent = self._heading_parent(7)  # closest heading
-                    for s in re.split(r"(?<=[.!?])\s+", direct):
+                    for s in _SENT_SPLIT.split(direct):
                         s = s.strip()
                         if len(s) > 1:
                             seg = Segment(SegType.TEXT, s, parent=parent)

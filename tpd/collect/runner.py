@@ -126,10 +126,7 @@ def docset_usable(corpus: Corpus, target_type: str, docs: list[CollectedDoc]) ->
     return False
 
 def usable_target_ids(corpus: Corpus) -> list[str]:
-    """Target ids whose document set is usable (:func:`docset_usable`).
-
-    Removes document sets without usable docs.
-    """
+    """Target ids whose document set is usable (:func:`docset_usable`)."""
     ids: list[str] = []
     for tid in corpus.list_targets():
         target, docs = corpus.read_manifest(tid)
@@ -155,10 +152,11 @@ def collect_stratified(
     seed: int = 0,
     oversample: int = 8,
     progress=None,
-) -> dict[str, list[CollectedDoc]]:
+) -> tuple[dict[str, list[CollectedDoc]], set[str]]:
     """Collect a corpus balanced across target types."""
     rng = random.Random(seed)
     out: dict[str, list[CollectedDoc]] = {}
+    usable_ids: set[str] = set()
 
     def _safe(t: Target) -> tuple[Target, list[CollectedDoc]]:
         try:
@@ -203,6 +201,7 @@ def collect_stratified(
                     good = docset_usable(corpus, t.type, docs)
                     if good:
                         usable += 1
+                        usable_ids.add(t.id)
                     if progress:
                         progress(t, f"{'USABLE' if good else 'skip  '} "
                                      f"[{ttype}] {usable}/{per_type} (tried {attempted})")
@@ -212,7 +211,7 @@ def collect_stratified(
         if progress:
             progress(Target(id="", type=ttype),
                      f"== {ttype}: {usable} usable from {attempted} attempts ==")
-    return out
+    return out, usable_ids
 
 _WEB_TYPES = {TargetType.WEBSITE.value, TargetType.DATA_BROKER.value}
 # Companion disclosure roles worth back-filling.
@@ -558,16 +557,12 @@ def run_collection(
     """
     report = CollectionReport()
 
-    report.collected = collect_stratified(
+    report.collected, usable_ids = collect_stratified(
         seeds, corpus, per_type=per_type, workers=workers, delay=delay,
         force=force, seed=seed, oversample=oversample, progress=progress,
     )
-    seed_type = {s.id: s.type for s in seeds}
     report.attempted = len(report.collected)
-    report.usable = sum(
-        1 for tid, docs in report.collected.items()
-        if docset_usable(corpus, seed_type.get(tid, tid.split("__")[0]), docs)
-    )
+    report.usable = len(usable_ids)
     all_docs = [d for docs in report.collected.values() for d in docs]
     report.registry_docs = sum(1 for d in all_docs if d.role in _REGISTRY_ROLES)
     report.disclosure_docs = sum(1 for d in all_docs if d.role in _BACKFILL_ROLES)
