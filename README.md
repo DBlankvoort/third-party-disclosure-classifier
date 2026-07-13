@@ -43,6 +43,10 @@ Lastly, we evaluate our framework using data from:
 - [The MAPS Policies Dataset](https://usableprivacy.org/data/) for samples of Google Play Store apps.
 - [The Princeton-Leuven Longitudinal Corpus Crawler](https://privacypolicies.cs.princeton.edu/) for samples of websites.
 
+
+
+Additionally, we make use of Claude Code in the design and implementation of this project.
+
 ## Installation
 
 Requires Python ≥ 3.10 (developed on 3.12).

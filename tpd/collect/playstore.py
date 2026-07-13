@@ -60,7 +60,7 @@ def collect_play_app(
                 docs.append(doc)
         return doc if res.ok else None
 
-    listing = _save(DETAILS_URL.format(app_id=app_id), "store_listing", keep=False)
+    listing = _save(DETAILS_URL.format(app_id=app_id), "store_listing")
     safety = _save(DATASAFETY_URL.format(app_id=app_id), "play_data_safety")
 
     # follow the developer's privacy policy link if recoverable
