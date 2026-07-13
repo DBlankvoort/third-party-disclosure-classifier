@@ -121,15 +121,3 @@ class PhraseNormalizer:
             else:
                 out.append(w)
         return " ".join(out)
-
-
-def spacy_lemmatizer(nlp):
-    """Build a lemmatizer callable backed by a spaCy pipeline."""
-    def _lem(text: str) -> str:
-        doc = nlp.nlp.make_doc(text) if hasattr(nlp, "nlp") else nlp(text)
-        try:
-            doc = nlp(text) if not hasattr(nlp, "nlp") else nlp.nlp(text)
-            return " ".join(t.lemma_.lower() for t in doc if not t.is_punct)
-        except Exception:
-            return text
-    return _lem
