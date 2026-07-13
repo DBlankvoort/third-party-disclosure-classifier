@@ -1,0 +1,31 @@
+{
+  "verb_groups": {
+    "collect": {
+      "verbs": ["collect", "gather", "obtain", "get", "receive", "solicit", "acquire", "request"],
+      "subject_action": "collect",
+      "recipient_action": null
+    },
+    "share": {
+      "verbs": ["share", "trade", "exchange", "disclose", "provide", "supply", "release", "transfer", "transmit", "submit", "give", "divulge", "pass"],
+      "subject_action": "collect",
+      "recipient_action": "be_shared"
+    },
+    "sell": {
+      "verbs": ["sell", "rent", "lease"],
+      "subject_action": "collect",
+      "recipient_action": "be_sold"
+    },
+    "use": {
+      "verbs": ["use", "access", "process", "analyze", "utilize", "need", "maintain"],
+      "subject_action": "use",
+      "recipient_action": null
+    },
+    "store": {
+      "verbs": ["store", "keep", "save", "hold", "log", "record", "retain", "preserve"],
+      "subject_action": "store",
+      "recipient_action": null
+    }
+  },
+  "recipient_preps": ["with", "to"],
+  "negation_words": ["not", "never", "no", "neither", "nor", "without", "n't"]
+}

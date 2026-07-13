@@ -2,6 +2,7 @@
 /corpus
 /out
 /labels
+/project-goals
 _cache_corpus/
 
 __pycache__/

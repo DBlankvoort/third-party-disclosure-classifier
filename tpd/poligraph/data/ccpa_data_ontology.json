@@ -1,0 +1,50 @@
+{
+  "concepts": [
+    {"id": "PersonalData", "label": "personal information", "parents": [], "def": "Data about individuals."},
+    {"id": "Identifier", "label": "identifier", "parents": [], "def": "Data that uniquely identify entities."},
+    {"id": "DeviceInfo", "label": "device information", "parents": [], "def": "Data about electronic devices."},
+
+    {"id": "PersonalIdentifier", "label": "personal identifier", "parents": ["PersonalData", "Identifier"], "def": "Data that uniquely identify an individual."},
+    {"id": "GovernmentID", "label": "government identifier", "parents": ["PersonalIdentifier"], "summary_category": true, "def": "Government-issued identification numbers used to uniquely identify individuals."},
+    {"id": "TaxID", "label": "ssn", "parents": ["GovernmentID"], "def": "An identification number assigned by a tax authority, e.g. a Social Security Number."},
+    {"id": "PassportNumber", "label": "passport number", "parents": ["GovernmentID"], "def": "An identification number assigned on an individual's passport."},
+    {"id": "DriverLicenseNumber", "label": "driver's license number", "parents": ["GovernmentID"], "def": "A unique number assigned to an individual's driver's license."},
+    {"id": "ContactInfo", "label": "contact information", "parents": ["PersonalIdentifier"], "summary_category": true, "def": "Data used to contact an individual."},
+    {"id": "EmailAddress", "label": "email address", "parents": ["ContactInfo"], "def": "An electronic mail address used for sending and receiving messages over the internet."},
+    {"id": "PostalAddress", "label": "postal address", "parents": ["ContactInfo"], "def": "The physical address where an individual resides or receives mail."},
+    {"id": "PersonName", "label": "person name", "parents": ["ContactInfo"], "def": "The name of an individual, usually including given name(s) and surname(s)."},
+    {"id": "PhoneNumber", "label": "phone number", "parents": ["ContactInfo"], "def": "A telephone number associated with an individual, used for voice calls or text messaging."},
+
+    {"id": "DeviceIdentifier", "label": "device identifier", "parents": ["Identifier", "DeviceInfo"], "def": "Identifiers associated with electronic devices."},
+    {"id": "SoftwareIdentifier", "label": "software identifier", "parents": ["DeviceIdentifier"], "summary_category": true, "def": "Identifiers associated with software applications."},
+    {"id": "IPAddress", "label": "ip address", "parents": ["SoftwareIdentifier"], "def": "The Internet Protocol address assigned to each device connected to a computer network."},
+    {"id": "AndroidID", "label": "android id", "parents": ["SoftwareIdentifier"], "def": "A user-resettable, unique identifier generated for each Android device."},
+    {"id": "RouterSSID", "label": "router ssid", "parents": ["SoftwareIdentifier"], "def": "The Service Set Identifier (SSID), the name assigned to a Wi-Fi network by a wireless router."},
+    {"id": "AdvertisingID", "label": "advertising id", "parents": ["SoftwareIdentifier"], "def": "A user-resettable, unique identifier used for advertising purposes on mobile devices."},
+    {"id": "GSFID", "label": "gsf id", "parents": ["SoftwareIdentifier"], "def": "Google Services Framework identifier used to identify a device on Google services."},
+    {"id": "CookieOrSimilar", "label": "cookie / pixel tag", "parents": ["SoftwareIdentifier"], "def": "Small pieces of data stored on a user's device by websites or applications, such as cookies, E-tags, or pixel tags, mainly used for tracking."},
+    {"id": "HardwareIdentifier", "label": "hardware identifier", "parents": ["DeviceIdentifier"], "summary_category": true, "def": "Identifiers associated with physical hardware devices."},
+    {"id": "MACAddress", "label": "mac address", "parents": ["HardwareIdentifier"], "def": "A unique identifier assigned to a network interface controller for communications at the data link layer of a network segment."},
+    {"id": "IMEI", "label": "imei", "parents": ["HardwareIdentifier"], "def": "The International Mobile Equipment Identity, a unique identifier assigned to mobile devices for identification on cellular networks."},
+    {"id": "SIMSerialNumber", "label": "sim serial number", "parents": ["HardwareIdentifier"], "def": "A unique number assigned by the carrier to identify a SIM card."},
+    {"id": "SerialNumber", "label": "serial number", "parents": ["HardwareIdentifier"], "def": "A unique code assigned by the manufacturer to identify a specific device."},
+
+    {"id": "PersonalCharacteristics", "label": "personal characteristic", "parents": ["PersonalData"], "def": "Data about an individual's physical or demographic characteristics."},
+    {"id": "ProtectedClass", "label": "protected classification", "parents": ["PersonalCharacteristics"], "summary_category": true, "def": "Data relating to legally protected personal characteristics."},
+    {"id": "Gender", "label": "gender", "parents": ["ProtectedClass"], "def": "Data about an individual's gender or gender identity."},
+    {"id": "Ethnicity", "label": "race / ethnicity", "parents": ["ProtectedClass"], "def": "Data about an individual's race or ethnic background."},
+    {"id": "DateOfBirth", "label": "date of birth", "parents": ["ProtectedClass"], "def": "The date on which an individual was born."},
+    {"id": "Age", "label": "age", "parents": ["ProtectedClass"], "def": "An individual's age or age range."},
+    {"id": "Biometric", "label": "biometric information", "parents": ["PersonalCharacteristics"], "summary_category": true, "def": "Biological characteristics used for individual identification."},
+    {"id": "Voiceprint", "label": "voiceprint", "parents": ["Biometric"], "def": "A digital representation of an individual's unique vocal characteristics."},
+    {"id": "Fingerprint", "label": "fingerprint", "parents": ["Biometric"], "def": "The unique patterns of friction ridges on an individual's finger."},
+
+    {"id": "Location", "label": "geolocation", "parents": ["PersonalData", "DeviceInfo"], "summary_category": true, "def": "Data indicating the geographical location of an individual or device."},
+    {"id": "CoarseLocation", "label": "coarse geolocation", "parents": ["Location"], "def": "General location data, such as city or postal code, providing approximate location."},
+    {"id": "PreciseLocation", "label": "precise geolocation", "parents": ["Location"], "def": "Exact geographical coordinates, such as GPS latitude and longitude, providing specific location details."},
+
+    {"id": "InternetActivity", "label": "internet activity", "parents": ["PersonalData", "DeviceInfo"], "summary_category": true, "def": "Data related to an individual's use of the internet and applications."},
+    {"id": "ApplicationInstalled", "label": "application installed", "parents": ["InternetActivity"], "def": "Data about software applications installed on a device, such as names, versions, and installation dates."},
+    {"id": "BrowsingHistory", "label": "browsing / search history", "parents": ["InternetActivity"], "def": "Records of websites visited by an individual, including URLs and timestamps, and records of search queries entered by an individual into search engines."}
+  ]
+}

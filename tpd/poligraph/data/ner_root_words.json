@@ -1,0 +1,10 @@
+{
+  "DATA": ["information", "data", "datum", "address", "number", "location",
+           "geolocation", "identifier", "id", "preference", "setting", "cookie"],
+  "ENTITY": ["agency", "advertiser", "affiliate", "analytic", "analytics", "app",
+             "application", "broker", "business", "carrier", "company",
+             "corporation", "distributor", "group", "institution", "network",
+             "operator", "organization", "partner", "party", "platform",
+             "processor", "product", "provider", "publisher", "service", "site",
+             "software", "subsidiary", "vendor", "website"]
+}

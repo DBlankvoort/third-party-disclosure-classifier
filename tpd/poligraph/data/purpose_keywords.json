@@ -1,0 +1,22 @@
+{
+  "services": ["provide", "service", "feature", "functionality", "operate", "improve",
+               "personalize", "personalise", "customize", "customise", "deliver",
+               "maintain", "support", "account", "registration", "register",
+               "process order", "payment", "purchase", "transaction", "ship",
+               "fulfil", "fulfill", "communicate", "respond", "request",
+               "user experience", "develop", "enhance", "performance"],
+  "security": ["security", "secure", "fraud", "protect", "prevent", "abuse",
+               "safety", "authenticate", "authentication", "verify", "verification",
+               "integrity", "detect", "threat", "unauthorized", "unauthorised",
+               "rights and property"],
+  "legal": ["legal", "law", "comply", "compliance", "regulation", "regulatory",
+            "obligation", "court", "subpoena", "law enforcement", "litigation",
+            "terms of service", "enforce", "dispute", "audit", "tax"],
+  "advertising": ["advertis", "ad ", "ads", "marketing", "promotion", "promotional",
+                  "campaign", "targeted", "interest-based", "personalized ad",
+                  "remarketing", "retargeting", "offer", "sponsor"],
+  "analytics": ["analytic", "analysis", "analyze", "analyse", "statistic",
+                "measurement", "measure", "metric", "research", "track usage",
+                "usage data", "understand how", "trend", "insight", "report",
+                "monitor", "aggregate", "demographic"]
+}

@@ -1,0 +1,11 @@
+{
+  "_comment": "Global entity ontology (Figure 3). Two-level: six service-type categories, each subsuming concrete companies. The paper derives 4,709 entities from the DuckDuckGo Tracker Radar and a CrunchBase-based dataset; here we ship a representative sample. 'we' and 'unspecified third party' are special nodes (Section 4.1.3).",
+  "categories": [
+    {"label": "advertiser", "members": ["tapjoy", "applovin", "unity ads", "vungle", "chartboost", "inmobi", "mopub", "admob", "ironsource", "adcolony", "the trade desk"]},
+    {"label": "analytic provider", "members": ["adjust", "flurry", "mixpanel", "amplitude", "appsflyer", "kochava", "branch", "google analytics", "firebase", "crashlytics"]},
+    {"label": "social media", "members": ["facebook", "pinterest", "twitter", "instagram", "linkedin", "snapchat", "tiktok", "reddit", "vkontakte"]},
+    {"label": "content provider", "members": ["youtube", "google maps", "cloudflare", "amazon web services", "akamai", "fastly", "giphy"]},
+    {"label": "auth provider", "members": ["google sign-in", "facebook login", "apple sign in", "auth0", "okta"]},
+    {"label": "email service provider", "members": ["mailchimp", "sendgrid", "mandrill", "constant contact", "sendinblue", "mailgun"]}
+  ]
+}
