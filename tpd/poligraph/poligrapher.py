@@ -52,10 +52,11 @@ class PoliGrapher:
     def _parse(self, tree: DocumentTree) -> list[ParsedSentence]:
         sentences = tree.sentences()
         parsed: list[ParsedSentence] = []
-        # Deduplicate identical texts.
-        texts = [s.text for s in sentences]
-        docs = list(self.nlp.nlp.pipe(texts))
-        for sid, (sent, doc) in enumerate(zip(sentences, docs)):
+        # Dedup before running nlp.pipe.
+        unique_texts = list(dict.fromkeys(s.text for s in sentences))
+        docs_by_text = dict(zip(unique_texts, self.nlp.nlp.pipe(unique_texts)))
+        for sid, sent in enumerate(sentences):
+            doc = docs_by_text[sent.text]
             spans = self.nlp.entities(doc)
             parsed.append(ParsedSentence(sid, doc, spans, source=sent))
         return parsed
