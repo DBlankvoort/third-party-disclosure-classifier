@@ -95,6 +95,9 @@ class DataOntology(Ontology):
 class EntityOntology(Ontology):
     @classmethod
     def default(cls) -> "EntityOntology":
+        from .. import gazetteer
+
+        known = gazetteer.COMPANIES | gazetteer.SERVICES
         spec = _load("entity_ontology.json")
         g = nx.DiGraph()
         summary: set[str] = set()
@@ -103,7 +106,13 @@ class EntityOntology(Ontology):
             g.add_node(label)
             summary.add(label)
             for m in cat["members"]:
-                g.add_edge(label, m.lower())
+                member = m.lower()
+                if member not in known:
+                    raise ValueError(
+                        f"entity_ontology.json member {member!r} is not in "
+                        "tpd.gazetteer (COMPANIES/SERVICES)."
+                    )
+                g.add_edge(label, member)
         return cls(g, summary)
 
     def category_of(self, entity: str) -> Optional[str]:

@@ -75,40 +75,54 @@ _CORP_SUFFIX_RE = re.compile(
 _NER_CACHE: dict[str, object] = {}
 
 
-def load_ner(enable: bool = True):
+def load_ner(enable: bool = True, nlp=None):
     """Return (ner_fn, backend_name), with ner_fn(text) returning a list[str] of ORG surfaces."""
     if not enable:
         return (lambda text: []), "disabled"
-    if "fn" in _NER_CACHE:
+    cache_key = id(nlp) if nlp is not None else "own"
+    if _NER_CACHE.get("key") == cache_key:
         return _NER_CACHE["fn"], _NER_CACHE["name"]
-    
-    try:
-        import spacy
 
-        # We only need the NER pipe, so disable the parser, tagger,
-        # lemmatizer and attribute-ruler for ~2-3x faster inference.
-        nlp = spacy.load(
-            "en_core_web_sm",
-            disable=["parser", "tagger", "lemmatizer", "attribute_ruler"],
-        )
-
+    if nlp is not None:
         def ner_fn(text):
             return [e.text for e in nlp(text).ents if e.label_ in ("ORG", "PRODUCT")]
 
         def ner_fn_batch(texts):
-            # Batched function for rich document sets.
             return [
                 [e.text for e in d.ents if e.label_ in ("ORG", "PRODUCT")]
                 for d in nlp.pipe(texts)
             ]
 
         ner_fn.batch = ner_fn_batch
-        name = f"spaCy {spacy.__version__}/en_core_web_sm (ner-only)"
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] spaCy unavailable ({exc}); gazetteer-only NER", file=sys.stderr)
-        ner_fn, name = (lambda text: []), "gazetteer-only"
-        ner_fn.batch = lambda texts: [[] for _ in texts]
-    _NER_CACHE["fn"], _NER_CACHE["name"] = ner_fn, name
+        name = f"shared spaCy pipeline ({nlp.meta.get('name', '?')})"
+    else:
+        try:
+            import spacy
+
+            # We only need the NER pipe, so disable the parser, tagger,
+            # lemmatizer and attribute-ruler for ~2-3x faster inference.
+            own_nlp = spacy.load(
+                "en_core_web_sm",
+                disable=["parser", "tagger", "lemmatizer", "attribute_ruler"],
+            )
+
+            def ner_fn(text):
+                return [e.text for e in own_nlp(text).ents if e.label_ in ("ORG", "PRODUCT")]
+
+            def ner_fn_batch(texts):
+                # Batched function for rich document sets.
+                return [
+                    [e.text for e in d.ents if e.label_ in ("ORG", "PRODUCT")]
+                    for d in own_nlp.pipe(texts)
+                ]
+
+            ner_fn.batch = ner_fn_batch
+            name = f"spaCy {spacy.__version__}/en_core_web_sm (ner-only)"
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] spaCy unavailable ({exc}); gazetteer-only NER", file=sys.stderr)
+            ner_fn, name = (lambda text: []), "gazetteer-only"
+            ner_fn.batch = lambda texts: [[] for _ in texts]
+    _NER_CACHE["key"], _NER_CACHE["fn"], _NER_CACHE["name"] = cache_key, ner_fn, name
     return ner_fn, name
 
 

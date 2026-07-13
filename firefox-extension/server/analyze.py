@@ -136,7 +136,14 @@ def analyze_url(
         fetch_target(target, corpus, force=force, delay=delay)
 
     # Classify the target.
-    result = classify_corpus(corpus, use_ner=use_ner, target_ids=[target.id])
+    poligraph_on = use_poligraph and poligraph_available()
+    ner_nlp = None
+    if poligraph_on:
+        from tpd.poligraph.nlp import get_nlp as get_poligraph_nlp
+        ner_nlp = get_poligraph_nlp().nlp
+    result = classify_corpus(
+        corpus, use_ner=use_ner, target_ids=[target.id], ner_nlp=ner_nlp,
+    )
     if not result.targets:
         return _empty(origin, target.id, cached)
     tc = result.targets[0]
@@ -152,7 +159,6 @@ def analyze_url(
         if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
     ]
     first_party = first_party_tokens(fp_urls, name=target.name)
-    poligraph_on = use_poligraph and poligraph_available()
     prose_rels = target_relations(
         corpus, target.id, raw_docs, first_party=first_party, force=force,
     ) if poligraph_on else []

@@ -65,13 +65,14 @@ def classify_corpus(
     cache=None,
     target_ids: list[str] | None = None,
     workers: int = 1,
+    ner_nlp=None,
 ) -> CorpusResult:
     """Classify every target in the corpus."""
     result = CorpusResult()
     ids = target_ids if target_ids is not None else corpus.list_targets()
     parallel = workers > 1 and cache is None
 
-    ner_fn, _ = load_ner(enable=use_ner) if not parallel else (None, None)
+    ner_fn, _ = load_ner(enable=use_ner, nlp=ner_nlp) if not parallel else (None, None)
     pool = (
         ProcessPoolExecutor(max_workers=workers, initializer=_init_worker)
         if parallel else None

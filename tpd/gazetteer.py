@@ -26,6 +26,10 @@ SERVICES = {
     "hubspot", "intercom", "zendesk chat", "drift", "hotjar", "vwo",
     "the trade desk", "index exchange", "pubmatic", "magnite", "liveintent",
     "integral ad science", "doubleverify", "moat",
+    "tapjoy", "applovin", "unity ads", "vungle", "chartboost", "inmobi",
+    "mopub", "ironsource", "adcolony", "giphy",
+    "google sign-in", "facebook login", "apple sign in",
+    "mandrill", "sendinblue",
 }
 
 # Named companies / organisations.
@@ -50,6 +54,7 @@ COMPANIES = {
     # consent-management platforms
     "onetrust", "trustarc", "cookiebot", "usercentrics", "didomi", "quantcast",
     "sourcepoint", "osano", "termly", "iubenda",
+    "vkontakte",
 }
 
 # Words which, as a tail, transform a company into a service.
