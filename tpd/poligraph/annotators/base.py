@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..document import Sentence
+from ...extract import Sentence
 from ..nlp import EntitySpan
 from ..phrase_graph import PhraseGraph, PhraseLabel
 

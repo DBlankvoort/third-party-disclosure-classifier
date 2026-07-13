@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from ..document import SegType
+from ...extract import NodeType
 from ..phrase_graph import PhraseEdge, PhraseLabel
 from .base import Annotator, AnnotatorContext, ParsedSentence
 
@@ -27,7 +27,7 @@ class ListAnnotator(Annotator):
         parents: dict[int, object] = {}
         for p in ctx.sentences:
             seg = p.source.segment if p.source else None
-            if seg is None or seg.seg_type is not SegType.LISTITEM:
+            if seg is None or seg.type is not NodeType.LISTITEM:
                 continue
             par = seg.parent
             if par is None:

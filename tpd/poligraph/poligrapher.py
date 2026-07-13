@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .annotators import DEFAULT_ANNOTATORS, AnnotatorContext, ParsedSentence
-from .document import DocumentTree
+from ..extract import DocTree
 from .graph import Action, EdgeType, Purpose, PoliGraph
 from .nlp import NLP, get_nlp
 from .normalize import PhraseNormalizer
@@ -31,12 +31,12 @@ class PoliGrapher:
 
     # ------------------------------------------------------------------ public
     def from_html(self, html: str, policy_id: Optional[str] = None) -> PoliGraph:
-        return self._run(DocumentTree.from_html(html), policy_id)
+        return self._run(DocTree.from_html(html), policy_id)
 
     def from_text(self, text: str, policy_id: Optional[str] = None) -> PoliGraph:
-        return self._run(DocumentTree.from_text(text), policy_id)
+        return self._run(DocTree.from_text(text), policy_id)
 
-    def build_phrase_graph(self, tree: DocumentTree) -> tuple[PhraseGraph, list[ParsedSentence]]:
+    def build_phrase_graph(self, tree: DocTree) -> tuple[PhraseGraph, list[ParsedSentence]]:
         parsed = self._parse(tree)
         pg = PhraseGraph()
         ctx = AnnotatorContext(parsed, pg)
@@ -45,11 +45,11 @@ class PoliGrapher:
         return pg, parsed
 
     # --------------------------------------------------------------- internals
-    def _run(self, tree: DocumentTree, policy_id) -> PoliGraph:
+    def _run(self, tree: DocTree, policy_id) -> PoliGraph:
         pg, _ = self.build_phrase_graph(tree)
         return self._build_poligraph(pg, policy_id)
 
-    def _parse(self, tree: DocumentTree) -> list[ParsedSentence]:
+    def _parse(self, tree: DocTree) -> list[ParsedSentence]:
         sentences = tree.sentences()
         parsed: list[ParsedSentence] = []
         # Dedup before running nlp.pipe.

@@ -1,8 +1,8 @@
-"""Validate tpd.extract.parse_html."""
+"""Validate tpd.extract.parse_html and DocTree."""
 
 from __future__ import annotations
 
-from tpd.extract import parse_html
+from tpd.extract import DocTree, NodeType, parse_html
 
 POLICY_HTML = """
 <html><head><title>Privacy Policy</title>
@@ -75,3 +75,52 @@ class TestParseHtml:
         </table>"""
         (tbl,) = parse_html(html).tables
         assert tbl.name_cells == ["Google"]
+
+
+class TestDocTree:
+    def test_headings_nest_and_parent_text(self):
+        tree = DocTree.from_html(
+            "<body><h1>Privacy</h1><h2>Sharing</h2>"
+            "<p>We share data with partners.</p></body>")
+        (text,) = tree.segments(NodeType.TEXT)
+        assert text.parent.text == "Sharing"
+        assert [a.text for a in text.ancestors()[:-1]] == ["Sharing", "Privacy"]
+
+    def test_list_items_join_their_lead_in(self):
+        tree = DocTree.from_html(
+            "<body><p>We share data with:</p>"
+            "<ul><li>advertisers</li><li>analytics providers</li></ul></body>")
+        joined = [s.text for s in tree.sentences() if s.variant == 1]
+        assert "We share data with: advertisers" in joined
+
+    def test_inline_markup_does_not_split_sentences(self):
+        tree = DocTree.from_html("<body><p>We <b>share</b> your data.</p></body>")
+        assert [s.text for s in tree.sentences()] == ["We share your data."]
+
+    def test_table_becomes_node_and_feeds_sentences(self):
+        tree = DocTree.from_html(
+            "<body><table><tr><th>Provider</th><th>Purpose</th></tr>"
+            "<tr><td>Hotjar</td><td>Hotjar collects usage statistics.</td></tr>"
+            "</table></body>")
+        (node,) = tree.segments(NodeType.TABLE)
+        assert node.table.name_cells == ["Hotjar"]
+        assert node.table.rows == [["Hotjar", "Hotjar collects usage statistics."]]
+        cell_sentences = {s.text for s in tree.sentences() if s.segment is node}
+        assert cell_sentences == {"Hotjar collects usage statistics."}
+
+    def test_boilerplate_kept_in_document_but_not_sentences(self):
+        tree = DocTree.from_html(
+            "<body><p>We share data with partners.</p>"
+            "<footer><p>Follow us on Facebook.</p></footer></body>")
+        doc = tree.as_document()
+        assert any("Facebook" in s for s in doc.segments)
+        assert "Facebook" in doc.text
+        assert not any("Facebook" in s.text for s in tree.sentences())
+
+    def test_from_text_bullets_and_sentences(self):
+        tree = DocTree.from_text(
+            "We collect data. We share it.\n- with advertisers\n")
+        items = tree.segments(NodeType.LISTITEM)
+        assert [n.text for n in items] == ["with advertisers"]
+        texts = [n.text for n in tree.segments(NodeType.TEXT)]
+        assert texts == ["We collect data.", "We share it."]
