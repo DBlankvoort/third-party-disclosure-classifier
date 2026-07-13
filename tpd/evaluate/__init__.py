@@ -1,10 +1,13 @@
 """Evaluation + hand-labelling."""
 
 from .labeling import (
+    distinct_data_type_clauses,
     load_presence_gold,
+    load_propagation_gold,
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
+    write_propagation_sheet,
     write_relevance_sheet,
     write_typology_sheet,
 )
@@ -14,6 +17,8 @@ from .metrics import (
     LatencyReport,
     NamingReport,
     IdentificationReport,
+    OntologyAccommodationReport,
+    PropagationReport,
     APP_TARGET_TYPES,
     relevance,
     agreement,
@@ -22,20 +27,27 @@ from .metrics import (
     naming_rate,
     policy_identification,
     structured_list_identification,
+    ontology_accommodation,
+    propagation,
 )
 
 __all__ = [
     "write_relevance_sheet",
     "write_typology_sheet",
+    "write_propagation_sheet",
+    "distinct_data_type_clauses",
     "load_relevance_gold",
     "load_typology_gold",
     "load_typology_gold_docs",
     "load_presence_gold",
+    "load_propagation_gold",
     "RelevanceReport",
     "AgreementReport",
     "LatencyReport",
     "NamingReport",
     "IdentificationReport",
+    "OntologyAccommodationReport",
+    "PropagationReport",
     "APP_TARGET_TYPES",
     "relevance",
     "coverage",
@@ -44,4 +56,6 @@ __all__ = [
     "naming_rate",
     "policy_identification",
     "structured_list_identification",
+    "ontology_accommodation",
+    "propagation",
 ]

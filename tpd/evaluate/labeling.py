@@ -21,6 +21,10 @@ TYPOLOGY_FIELDS = [
     "predicted_medium", "predicted_doc_facets", "predicted_target_class",
     "gold_facets", "notes",
 ]
+PROPAGATION_FIELDS = [
+    "label_order", "clause_id", "target_id", "entity", "data_type",
+    "predicted_propagated", "gold_correct", "notes",
+]
 
 
 def _shuffled_targets(result: CorpusResult, order_seed: int,
@@ -163,6 +167,76 @@ def load_presence_gold(path: str | Path, column: str) -> dict[str, bool]:
             v = (row.get(column) or "").strip().lower()
             if tid and v:
                 gold[tid] = v in ("1", "true", "yes")
+    return gold
+
+
+def distinct_data_type_clauses(relations_by_target: dict[str, list[dict]]) -> list[dict]:
+    """One clause per (target, entity) edge."""
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for tid, rels in relations_by_target.items():
+        for r in rels:
+            if r.get("negative") or not r.get("data_type"):
+                continue
+            key = (tid, r["entity"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"target_id": tid, "entity": r["entity"], "data_type": r["data_type"]})
+    return out
+
+
+def write_propagation_sheet(relations_by_target: dict[str, list[dict]], path: str | Path,
+                            order_seed: int = DEFAULT_ORDER_SEED,
+                            prior_path: str | Path | None = None) -> int:
+    """Write a hand-review sheet data type propagation."""
+    from ..poligraph.ontology import global_data_ontology
+
+    ontology = global_data_ontology()
+    clauses = distinct_data_type_clauses(relations_by_target)
+    random.Random(order_seed).shuffle(clauses)
+
+    prior_gold: dict[str, tuple[str, str]] = {}
+    if prior_path:
+        with open(prior_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                cid = row.get("clause_id") or ""
+                if cid:
+                    prior_gold[cid] = (
+                        (row.get("gold_correct") or ""), (row.get("notes") or "")
+                    )
+
+    rows = 0
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=PROPAGATION_FIELDS)
+        w.writeheader()
+        for order, c in enumerate(clauses, start=1):
+            clause_id = f"{c['target_id']}::{c['entity']}::{c['data_type']}"
+            propagated = sorted(ontology.descendants(c["data_type"]) - {c["data_type"].strip().lower()})
+            gold, notes = prior_gold.get(clause_id, ("", ""))
+            w.writerow({
+                "label_order": order,
+                "clause_id": clause_id,
+                "target_id": c["target_id"],
+                "entity": c["entity"],
+                "data_type": c["data_type"],
+                "predicted_propagated": ";".join(propagated),
+                "gold_correct": gold,
+                "notes": notes,
+            })
+            rows += 1
+    return rows
+
+
+def load_propagation_gold(path: str | Path) -> dict[str, bool]:
+    """Load hand-reviewed gold, keyed by clause_id."""
+    gold: dict[str, bool] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            cid = row.get("clause_id") or ""
+            v = (row.get("gold_correct") or "").strip().lower()
+            if cid and v:
+                gold[cid] = v in ("1", "true", "yes")
     return gold
 
 

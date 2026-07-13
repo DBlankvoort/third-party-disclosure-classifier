@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..classify.run import CorpusResult
 from ..collect.base import Corpus
@@ -19,6 +19,8 @@ TARGET_LIST_ID_WEBSITE = 0.75
 TARGET_LIST_ID_APP = 0.65
 TARGET_NAMING_WEBSITE = 0.50
 TARGET_NAMING_APP = 0.40
+TARGET_ONTOLOGY_COVERAGE = 0.95
+TARGET_PROPAGATION_MIN_N = 30
 
 APP_TARGET_TYPES = {"play_store_app", "app_store_app"}
 _STRUCTURED_LIST_ROLES = {
@@ -357,4 +359,84 @@ def structured_list_identification(
     return IdentificationReport(
         kind="structured_list", group=group, n_present=present, n_identified=identified,
         rate=rate, target=target, passed=(rate >= target) if present else False,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Data-sharing ontologies
+# --------------------------------------------------------------------------- #
+@dataclass
+class OntologyAccommodationReport:
+    n_terms: int = 0
+    n_accommodated: int = 0
+    rate: float = 0.0
+    unaccommodated: list[str] = field(default_factory=list)
+    passed: bool = False
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"Data ontology accommodates >= {_pct(TARGET_ONTOLOGY_COVERAGE)} of distinct "
+            f"data-type clauses: rate={_pct(self.rate)} "
+            f"({self.n_accommodated}/{self.n_terms}) -> {'PASS' if self.passed else 'FAIL'}"
+        )
+
+
+def ontology_accommodation(
+    relations_by_target: dict[str, list[dict]],
+    ontology=None,
+) -> OntologyAccommodationReport:
+    """Fraction of extracted data-type terms the global ontology recognises."""
+    if ontology is None:
+        from ..poligraph.ontology import global_data_ontology
+
+        ontology = global_data_ontology()
+
+    terms = {
+        r["data_type"].strip().lower()
+        for rels in relations_by_target.values() for r in rels
+        if r.get("data_type")
+    }
+    accommodated = {t for t in terms if t in ontology}
+    n = len(terms)
+    n_ok = len(accommodated)
+    return OntologyAccommodationReport(
+        n_terms=n,
+        n_accommodated=n_ok,
+        rate=(n_ok / n) if n else 0.0,
+        unaccommodated=sorted(terms - accommodated),
+        passed=(n_ok / n >= TARGET_ONTOLOGY_COVERAGE) if n else False,
+    )
+
+
+@dataclass
+class PropagationReport:
+    n_reviewed: int = 0
+    n_false: int = 0
+    false_rate: float = 0.0
+    passed: bool = False
+
+    @property
+    def summary(self) -> str:
+        if self.n_reviewed < TARGET_PROPAGATION_MIN_N:
+            return (
+                f"Data-type propagation review: only {self.n_reviewed}/"
+                f"{TARGET_PROPAGATION_MIN_N} distinct clauses reviewed so far -> FAIL"
+            )
+        return (
+            f"Data-type propagation review (>= {TARGET_PROPAGATION_MIN_N} distinct clauses, "
+            f"0 false propagations expected): {self.n_false} false / {self.n_reviewed} "
+            f"reviewed -> {'PASS' if self.passed else 'FAIL'}"
+        )
+
+
+def propagation(gold: dict[str, bool]) -> PropagationReport:
+    """Propagation tests."""
+    n = len(gold)
+    n_false = sum(1 for correct in gold.values() if not correct)
+    return PropagationReport(
+        n_reviewed=n,
+        n_false=n_false,
+        false_rate=(n_false / n) if n else 0.0,
+        passed=(n >= TARGET_PROPAGATION_MIN_N and n_false == 0),
     )

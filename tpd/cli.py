@@ -23,12 +23,16 @@ from .evaluate import (
     naming_rate,
     policy_identification,
     structured_list_identification,
+    ontology_accommodation,
+    propagation,
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
     load_presence_gold,
+    load_propagation_gold,
     write_relevance_sheet,
     write_typology_sheet,
+    write_propagation_sheet,
     APP_TARGET_TYPES,
 )
 
@@ -195,12 +199,13 @@ def _write_outputs(result, out_dir: str) -> None:
               help="existing dir to merge gold labels from.")
 def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, merge_dir) -> None:
     """Emit pre-filled hand-labelling sheets"""
+    from .classify.poligraph_connector import corpus_relations, poligraph_available
     from .evaluate.labeling import DEFAULT_ORDER_SEED
 
     seed = DEFAULT_ORDER_SEED if order_seed is None else order_seed
     corpus = Corpus(corpus_root)
-    result = classify_corpus(corpus, use_ner=not no_ner, workers=workers,
-                             target_ids=_eval_ids(corpus, include_unusable))
+    ids = _eval_ids(corpus, include_unusable)
+    result = classify_corpus(corpus, use_ner=not no_ner, workers=workers, target_ids=ids)
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     rel = Path(out_dir) / "relevance_labels.csv"
     typ = Path(out_dir) / "typology_labels.csv"
@@ -215,6 +220,16 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
     click.echo(f"wrote {n1} relevance rows -> {rel} (random target order, seed={seed})")
     click.echo(f"wrote {n2} typology rows  -> {typ} (random target order, seed={seed})")
 
+    if poligraph_available():
+        prop = Path(out_dir) / "propagation_labels.csv"
+        prior_prop = Path(merge_dir) / "propagation_labels.csv" if merge_dir else None
+        if prior_prop and not prior_prop.exists():
+            prior_prop = None
+        relations_by_target = corpus_relations(corpus, target_ids=ids)
+        n3 = write_propagation_sheet(relations_by_target, prop, order_seed=seed,
+                                     prior_path=prior_prop)
+        click.echo(f"wrote {n3} propagation rows -> {prop} (random order, seed={seed})")
+
 
 # --------------------------------------------------------------------------- #
 @cli.command(name="eval")
@@ -225,13 +240,15 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
               help="sheet with a target_id + gold_pp_present column")
 @click.option("--list-presence-gold", default=None,
               help="sheet with a target_id + gold_list_present column")
+@click.option("--propagation-gold", default=None,
+              help="hand-reviewed propagation_labels.csv")
 @click.option("--no-ner", is_flag=True)
 @click.option("--polisis", is_flag=True)
 @click.option("--workers", type=int, default=8, show_default=True,
               help="documents classified in parallel per target")
 @click.option("--include-unusable", is_flag=True)
 def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_presence_gold,
-          no_ner, polisis, workers, include_unusable) -> None:
+          propagation_gold, no_ner, polisis, workers, include_unusable) -> None:
     """Score key metrics."""
     corpus = Corpus(corpus_root)
     cache = None
@@ -272,6 +289,20 @@ def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
     for group, group_ids in ids_by_group.items():
         click.echo(policy_identification(corpus, pp_gold, group, target_ids=group_ids).summary)
         click.echo(structured_list_identification(corpus, list_gold, group, target_ids=group_ids).summary)
+
+    # Data-sharing ontology KPIs
+    from .classify.poligraph_connector import corpus_relations, poligraph_available
+
+    if poligraph_available():
+        click.echo("")
+        relations_by_target = corpus_relations(corpus, target_ids=ids)
+        click.echo(ontology_accommodation(relations_by_target).summary)
+        if propagation_gold:
+            gold = load_propagation_gold(propagation_gold)
+            if gold:
+                click.echo(propagation(gold).summary)
+            else:
+                click.echo("No filled gold_correct rows found.")
 
 
 # --------------------------------------------------------------------------- #

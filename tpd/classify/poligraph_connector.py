@@ -179,3 +179,27 @@ def target_relations(
         relations_from_graph(g, first_party=first_party, doc_id=doc_id)
         for doc_id, g in graphs.items()
     )
+
+
+def corpus_relations(
+    corpus,
+    target_ids: list[str] | None = None,
+    roles: set[str] = DEFAULT_ROLES,
+    force: bool = False,
+) -> dict[str, list[dict]]:
+    """The merged sharing-relation list for every target in the corpus."""
+    from .named_entities import first_party_tokens
+
+    ids = target_ids if target_ids is not None else corpus.list_targets()
+    out: dict[str, list[dict]] = {}
+    for tid in ids:
+        target, docs = corpus.read_manifest(tid)
+        fp_urls = [target.seed_policy_url] + [
+            d.url for d in docs if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
+        ]
+        first_party = first_party_tokens(fp_urls, name=target.name)
+        rels = target_relations(corpus, tid, docs, first_party=first_party,
+                                roles=roles, force=force)
+        if rels:
+            out[tid] = rels
+    return out
