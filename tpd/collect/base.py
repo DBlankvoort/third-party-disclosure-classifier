@@ -11,6 +11,8 @@ from pathlib import Path
 
 import requests
 
+_TRANSIENT_STATUSES = {0, 429, 500, 502, 503, 504}
+
 USER_AGENT = (
     "Mozilla/5.0 (compatible; tpd-research/0.1; +third-party-disclosure-typology) "
     "academic third-party disclosure pattern classifier"
@@ -172,7 +174,7 @@ def fetch(
     except Exception as exc:  # noqa: BLE001
         result = FetchResult(url=url, status=0, content_type="", text="", error=str(exc))
 
-    if cache_file is not None:
+    if cache_file is not None and result.status not in _TRANSIENT_STATUSES:
         try:
             cache_file.write_text(json.dumps(asdict(result)), encoding="utf-8")
         except Exception:  # noqa: BLE001
