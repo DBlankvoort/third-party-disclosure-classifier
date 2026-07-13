@@ -22,6 +22,7 @@ CONFIG = {
     "use_ner": True,
     "use_poligraph": True,
     "delay": 0.2,
+    "allowed_origin": "",
 }
 
 
@@ -30,8 +31,15 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ---------------------------------------------------------- #
     def _cors(self) -> None:
-        # The popup runs from a moz-extension:// origin; allow it.
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        allowed = CONFIG["allowed_origin"]
+        if allowed:
+            ok = origin == allowed
+        else:
+            ok = origin.startswith("moz-extension://")
+        if ok:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
