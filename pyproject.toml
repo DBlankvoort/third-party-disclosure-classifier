@@ -15,6 +15,7 @@ dependencies = [
     "click>=8.1",
     "lxml>=5.0",
     "networkx>=3.2",
+    "pypdf>=4.0",
     "requests>=2.31",
     "spacy>=3.7,<4",
     "tldextract>=5.0",
@@ -42,6 +43,7 @@ include = ["tpd*"]
 
 [tool.setuptools.package-data]
 "tpd.poligraph.data" = ["*.json"]
+"tpd.annotate" = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

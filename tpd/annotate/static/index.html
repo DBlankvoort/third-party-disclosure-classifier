@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TPD gold bench</title>
+<style>
+  :root {
+    --ink: #1d2025; --muted: #6e7378; --faint: #9aa0a6;
+    --paper: #f6f5f1; --panel: #ffffff; --line: #e3e0d8; --line-soft: #edebe4;
+    --rail: #23262c; --rail-ink: #c9ccd1; --rail-dim: #82878f; --rail-line: #33373e;
+    --accent: #0c6b62; --accent-soft: #e2efec; --accent-line: #b9d8d3;
+    --no: #a84b2f; --no-soft: #f5e8e2; --no-line: #e0c4b6;
+    --warn: #b7791f;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; font: 14px/1.5 var(--sans); color: var(--ink); background: var(--paper);
+    display: grid; grid-template-rows: auto 1fr;
+    grid-template-columns: 300px minmax(360px, 1fr) 430px;
+    grid-template-areas: "head head head" "queue viewer steps";
+  }
+  @media (max-width: 1100px) {
+    body { grid-template-columns: 240px 1fr; grid-template-rows: auto 1fr 1fr;
+           grid-template-areas: "head head" "queue viewer" "queue steps"; }
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  a { color: var(--accent); }
+  .eyebrow { font-size: 10.5px; font-weight: 650; letter-spacing: .09em;
+             text-transform: uppercase; color: var(--muted); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+
+  /* ---------------- header + KPI meters ---------------- */
+  header {
+    grid-area: head; display: flex; align-items: stretch; gap: 24px;
+    background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 18px 9px;
+  }
+  .brand { display: flex; flex-direction: column; justify-content: center; min-width: 150px; }
+  .brand b { font-size: 15px; letter-spacing: .01em; }
+  .brand span { font-size: 11.5px; color: var(--muted); }
+  #meters { display: flex; gap: 22px; align-items: center; flex: 1; flex-wrap: wrap; }
+  .meter { min-width: 128px; }
+  .meter .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .meter .count { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+  .meter .count.met { color: var(--accent); font-weight: 700; }
+  .meter .bar { height: 3px; background: var(--line-soft); border-radius: 2px; margin-top: 4px;
+                position: relative; overflow: hidden; }
+  .meter .bar i { position: absolute; inset: 0 auto 0 0; background: var(--warn);
+                  border-radius: 2px; transition: width .25s; }
+  .meter .bar i.met { background: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .meter .bar i { transition: none; } }
+
+  /* ---------------- target queue ---------------- */
+  #queue { grid-area: queue; background: var(--rail); color: var(--rail-ink);
+           display: flex; flex-direction: column; min-height: 0; }
+  #queue .qhead { padding: 12px 14px 8px; border-bottom: 1px solid var(--rail-line); }
+  #queue .qhead .eyebrow { color: var(--rail-dim); }
+  .qfilters { display: flex; gap: 6px; margin-top: 8px; }
+  .qfilters button { padding: 3px 10px; border-radius: 99px; font-size: 12px;
+                     border: 1px solid var(--rail-line); color: var(--rail-dim); }
+  .qfilters button.on { background: var(--rail-ink); color: var(--rail); border-color: var(--rail-ink); }
+  #qlist { overflow-y: auto; flex: 1; padding: 6px 0 20px; }
+  .qitem { width: 100%; text-align: left; padding: 7px 14px; display: flex; gap: 9px;
+           align-items: center; border-left: 3px solid transparent; }
+  .qitem:hover { background: #2a2e35; }
+  .qitem.on { background: #2e333b; border-left-color: var(--accent); }
+  .qorder { font-family: var(--mono); font-size: 11px; color: var(--rail-dim); width: 26px;
+            flex: none; text-align: right; }
+  .qname { flex: 1; min-width: 0; }
+  .qname .n { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .qname .t { font-size: 10.5px; color: var(--rail-dim); letter-spacing: .04em; }
+  .qdots { display: flex; gap: 4px; flex: none; }
+  .qdots i { width: 7px; height: 7px; border-radius: 99px; border: 1px solid var(--rail-dim); }
+  .qdots i.done { background: var(--accent); border-color: var(--accent); }
+  .qkeys { padding: 8px 14px; border-top: 1px solid var(--rail-line); font-size: 11px;
+           color: var(--rail-dim); line-height: 1.8; }
+  .qkeys kbd { font-family: var(--mono); background: #2e333b; border-radius: 3px;
+               padding: 0 5px; margin-right: 2px; }
+
+  /* ---------------- document viewer ---------------- */
+  #viewer { grid-area: viewer; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .vbar { display: flex; gap: 8px; align-items: center; padding: 9px 14px 0; flex-wrap: wrap; }
+  #doctabs { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+  .dtab { padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px 7px 0 0;
+          background: var(--line-soft); font-size: 12px; color: var(--muted);
+          border-bottom: none; max-width: 210px; white-space: nowrap; overflow: hidden;
+          text-overflow: ellipsis; }
+  .dtab.on { background: var(--panel); color: var(--ink); font-weight: 600; }
+  .dtab .rel { color: var(--accent); margin-right: 4px; }
+  .vviews { display: flex; gap: 2px; border: 1px solid var(--line); border-radius: 7px;
+            overflow: hidden; flex: none; }
+  .vviews button { padding: 3px 10px; font-size: 12px; color: var(--muted); }
+  .vviews button.on { background: var(--ink); color: var(--panel); }
+  #vmeta { padding: 5px 14px; font-size: 12px; color: var(--muted); display: flex; gap: 12px;
+           align-items: baseline; border-bottom: 1px solid var(--line); background: var(--panel);
+           border-top: 1px solid var(--line); }
+  #vmeta .url { font-family: var(--mono); font-size: 11.5px; white-space: nowrap; overflow: hidden;
+                text-overflow: ellipsis; flex: 1; min-width: 0; }
+  #vbody { flex: 1; min-height: 0; background: var(--panel); position: relative; }
+  #vbody iframe { width: 100%; height: 100%; border: 0; }
+  #vtext { height: 100%; overflow-y: auto; padding: 22px 34px 60px;
+           font-size: 14.5px; line-height: 1.62; max-width: 860px; }
+  #vtext h1 { font-size: 17px; margin: 0 0 14px; }
+  #vtext p { margin: 0 0 10px; white-space: pre-wrap; }
+  #vtext pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap;
+               word-break: break-all; }
+  .vempty { padding: 40px; color: var(--muted); }
+
+  /* ---------------- annotation rail ---------------- */
+  #steps { grid-area: steps; overflow-y: auto; border-left: 1px solid var(--line);
+           background: var(--paper); padding: 0 0 80px; min-height: 0; }
+  .thead { padding: 13px 16px 11px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .thead .n { font-weight: 700; font-size: 14.5px; word-break: break-all; }
+  .thead .u { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+  .step { margin: 14px 12px 0; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 9px; overflow: hidden; }
+  .step > .shead { display: flex; align-items: baseline; gap: 8px; padding: 9px 13px;
+                   border-bottom: 1px solid var(--line-soft); }
+  .step > .shead .tick { margin-left: auto; font-size: 12px; color: var(--faint); }
+  .step > .shead .tick.done { color: var(--accent); font-weight: 700; }
+  .sbody { padding: 10px 13px 13px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin: 0 0 10px; }
+
+  .docrow { border: 1px solid var(--line-soft); border-radius: 7px; padding: 8px 10px;
+            margin-bottom: 8px; }
+  .docrow.sel { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-line); }
+  .docrow .r1 { display: flex; gap: 8px; align-items: center; }
+  .docrow .role { font-weight: 600; font-size: 12.5px; cursor: pointer; flex: 1; min-width: 0;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+  .docrow .role:hover { color: var(--accent); }
+  .pred { font-size: 10.5px; color: var(--faint); font-family: var(--mono); flex: none; }
+  .evi { font-size: 11px; color: var(--muted); margin-top: 5px; overflow: hidden; display: -webkit-box;
+         -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .evi b { color: var(--ink); font-weight: 600; }
+
+  .seg { display: inline-flex; border-radius: 6px; overflow: hidden; border: 1px solid var(--line);
+         flex: none; }
+  .seg button { padding: 2.5px 10px; font-size: 12px; color: var(--muted); border-left: 1px solid var(--line); }
+  .seg button:first-child { border-left: none; }
+  .seg button.yes.on { background: var(--accent); color: #fff; }
+  .seg button.no.on { background: var(--no); color: #fff; }
+
+  .tagchips { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+  .chip { font-size: 11px; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line);
+          color: var(--muted); }
+  .chip.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent);
+             font-weight: 600; }
+
+  .mtag { font-size: 9.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
+          color: var(--warn); border: 1px solid currentColor; padding: 0 5px; border-radius: 4px;
+          flex: none; }
+  .rmbtn { margin-left: auto; font-size: 11px; color: var(--faint); }
+  .rmbtn:hover { color: var(--no); }
+
+  .addoc { border-top: 1px dashed var(--line); margin-top: 12px; padding-top: 11px; }
+  .addrow { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+  .addrow input[type="url"] { flex: 1; min-width: 0; border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); color: var(--ink);
+    background: var(--panel); }
+  .addrow .jslabel { font-size: 11.5px; color: var(--muted); display: inline-flex; gap: 3px;
+    align-items: center; flex: none; }
+  #add-btn { flex: none; font-size: 11.5px; padding: 4px 11px; border-radius: 6px;
+    border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+    font-weight: 600; }
+  #add-btn:hover { background: var(--accent); color: #fff; }
+  #add-btn:disabled { opacity: .55; cursor: wait; }
+  .adderr { color: var(--no); font-size: 11.5px; margin-top: 5px; }
+
+  .presence { border-top: 1px dashed var(--line); margin-top: 12px; padding-top: 11px; }
+  .prow { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .prow .q { flex: 1; font-size: 12.5px; }
+
+  .facetgrid { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  .facetgrid th { font-size: 10px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
+                  color: var(--muted); padding: 2px 4px; text-align: center; }
+  .facetgrid th.rowh { text-align: right; padding-right: 8px; }
+  .facetgrid td { padding: 2px; }
+  .fcell { width: 100%; padding: 4px 0; border: 1px solid var(--line); border-radius: 5px;
+           font-size: 11px; color: var(--faint); position: relative; }
+  .fcell.pred { border-style: dashed; border-color: var(--warn); color: var(--warn); }
+  .fcell.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .fnone { margin-top: 7px; }
+  .fnone .chip.on { background: var(--no-soft); border-color: var(--no-line); color: var(--no); }
+
+  .clause { border: 1px solid var(--line-soft); border-radius: 7px; padding: 9px 10px; margin-bottom: 8px; }
+  .clause .rel { font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  .clause .rel b { color: var(--accent); }
+  .prop { margin: 7px 0 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .prop span { font-family: var(--mono); font-size: 10.5px; background: var(--line-soft);
+               border-radius: 4px; padding: 1px 6px; }
+  .prop .none { background: none; color: var(--faint); font-style: italic; }
+
+  textarea.notes { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px;
+                   font: 12px/1.4 var(--sans); color: var(--ink); resize: vertical; min-height: 30px;
+                   background: var(--panel); margin-top: 7px; }
+  textarea.notes:focus, .fcell:focus-visible, .seg button:focus-visible, .chip:focus-visible,
+  .qitem:focus-visible, .dtab:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  #savebadge { position: fixed; right: 16px; bottom: 14px; background: var(--ink); color: var(--panel);
+               font-size: 12px; padding: 5px 12px; border-radius: 99px; opacity: 0; transition: opacity .2s;
+               pointer-events: none; }
+  #savebadge.err { background: var(--no); }
+  #savebadge.show { opacity: .93; }
+  .nextbtn { margin: 14px 12px 0; width: calc(100% - 24px); padding: 8px; border-radius: 8px;
+             border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+             font-weight: 650; font-size: 13px; }
+  .nextbtn:hover { background: var(--accent); color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>TPD gold bench</b><span id="corpusname">manual gold labelling</span></div>
+  <div id="meters"></div>
+</header>
+
+<nav id="queue">
+  <div class="qhead">
+    <div class="eyebrow">Targets</div>
+    <div class="qfilters">
+      <button id="f-all" class="on">All</button>
+      <button id="f-todo">To do</button>
+    </div>
+  </div>
+  <div id="qlist"></div>
+  <div class="qkeys">
+    <kbd>[</kbd><kbd>]</kbd> target &nbsp; <kbd>&larr;</kbd><kbd>&rarr;</kbd> document<br>
+    <kbd>y</kbd><kbd>n</kbd> discloses &nbsp; <kbd>p</kbd> policy &nbsp; <kbd>l</kbd> list
+  </div>
+</nav>
+
+<main id="viewer">
+  <div class="vbar">
+    <div id="doctabs"></div>
+    <div class="vviews">
+      <button data-view="text">Text</button>
+      <button data-view="page">Page</button>
+      <button data-view="raw">Raw</button>
+    </div>
+  </div>
+  <div id="vmeta"></div>
+  <div id="vbody"><div class="vempty">Pick a target on the left to start labelling.</div></div>
+</main>
+
+<aside id="steps"></aside>
+<div id="savebadge">Saved</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ state */
+const S = {
+  targets: [], progress: {},
+  tid: null, T: null,           // current target id + detail
+  did: null, view: "text",      // current doc + viewer mode
+  filter: "all",
+  textCache: new Map(),         // "tid/did" -> {title, segments}
+};
+const MEDIA = ["prose", "structured", "machine_readable", "other_doc"];
+const SPECS = ["named", "category", "generic"];
+const MEDIA_SHORT = { prose: "Prose", structured: "Structured",
+                      machine_readable: "Machine", other_doc: "Other doc" };
+const METERS = [
+  ["relevance_targets", "No.7 · doc sets"],
+  ["presence_website",  "No.8-9 · sites"],
+  ["presence_app",      "No.11-12 · apps"],
+  ["typology_docs",     "No.15 · typology"],
+  ["clauses",           "No.17 · clauses"],
+];
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  return r.json();
+}
+let badgeTimer = null;
+function badge(msg, err) {
+  const b = $("#savebadge");
+  b.textContent = msg; b.classList.toggle("err", !!err); b.classList.add("show");
+  clearTimeout(badgeTimer);
+  badgeTimer = setTimeout(() => b.classList.remove("show"), err ? 3500 : 900);
+}
+async function save(payload) {
+  try {
+    const r = await fetch("/api/save", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    S.progress = data.progress; renderMeters();
+    badge("Saved");
+    refreshSteps();
+  } catch (e) { badge("Save failed: " + e.message, true); }
+}
+async function refreshSteps() {
+  // Refresh the current target's step state + its queue row.
+  if (!S.tid) return;
+  const d = await api("/api/target/" + encodeURIComponent(S.tid));
+  if (d.target_id !== S.tid) return;
+  S.T.steps = d.steps;
+  const t = S.targets.find((x) => x.target_id === S.tid);
+  if (t) t.steps = d.steps;
+  renderQueue(); renderStepTicks();
+}
+
+/* ------------------------------------------------------------------ meters */
+function renderMeters() {
+  $("#meters").innerHTML = METERS.map(([key, label]) => {
+    const m = S.progress[key] || { done: 0, total: 0, goal: 0 };
+    const met = m.done >= m.goal;
+    const w = Math.min(100, m.goal ? (100 * m.done / m.goal) : 0);
+    return `<div class="meter" title="${esc(label)}: ${m.done} labelled of ${m.total} available (goal ${m.goal})">
+      <div class="top"><span class="eyebrow">${esc(label)}</span>
+        <span class="count ${met ? "met" : ""}">${m.done}/${m.goal}${met ? " &check;" : ""}</span></div>
+      <div class="bar"><i class="${met ? "met" : ""}" style="width:${w}%"></i></div></div>`;
+  }).join("");
+}
+
+/* ------------------------------------------------------------------ queue */
+function stepsDone(t) { return t.steps.s1 && t.steps.s2 && t.steps.s3; }
+function renderQueue() {
+  const list = S.targets.filter((t) => S.filter === "all" || !stepsDone(t));
+  $("#qlist").innerHTML = list.map((t) => {
+    const st = t.steps;
+    const dots = ["s1", "s2", "s3"].map((k) =>
+      `<i class="${st[k] ? "done" : ""}" title="step ${k[1]} ${st[k] ? "done" : "open"}"></i>`).join("");
+    return `<button class="qitem ${t.target_id === S.tid ? "on" : ""}" data-tid="${esc(t.target_id)}">
+      <span class="qorder">${esc(t.label_order)}</span>
+      <span class="qname"><div class="n">${esc(shortName(t.target_id))}</div>
+        <div class="t">${esc(t.target_type)}</div></span>
+      <span class="qdots">${dots}</span></button>`;
+  }).join("") || `<div style="padding:16px 14px;color:var(--rail-dim);font-size:12px">Nothing left - all done.</div>`;
+  document.querySelectorAll(".qitem").forEach((el) =>
+    el.addEventListener("click", () => loadTarget(el.dataset.tid)));
+}
+function shortName(tid) { return tid.replace(/^(website|data_broker|play_store_app|app_store_app)__/, ""); }
+
+/* ------------------------------------------------------------------ target */
+async function loadTarget(tid) {
+  S.T = await api("/api/target/" + encodeURIComponent(tid));
+  S.tid = tid;
+  S.did = (S.T.docs[0] || {}).doc_id || null;
+  const first = S.T.docs.find((d) => d.doc_id === S.did);
+  S.view = first && first.machine_readable ? "raw" : "text";
+  renderQueue(); renderTarget(); renderViewer();
+  $("#steps").scrollTop = 0;
+}
+function curDoc() { return S.T ? S.T.docs.find((d) => d.doc_id === S.did) : null; }
+
+/* ------------------------------------------------------------------ viewer */
+function renderViewer() {
+  const tabs = $("#doctabs");
+  if (!S.T) { tabs.innerHTML = ""; return; }
+  tabs.innerHTML = S.T.docs.map((d) =>
+    `<button class="dtab ${d.doc_id === S.did ? "on" : ""}" data-did="${esc(d.doc_id)}"
+       title="${esc(d.url)}">${d.gold_relevant === "1" ? '<span class="rel">&#9679;</span>' : ""}${esc(d.doc_id)}</button>`
+  ).join("");
+  tabs.querySelectorAll(".dtab").forEach((el) =>
+    el.addEventListener("click", () => setDoc(el.dataset.did)));
+  document.querySelectorAll(".vviews button").forEach((b) => {
+    b.classList.toggle("on", b.dataset.view === S.view);
+    b.onclick = () => { S.view = b.dataset.view; renderViewer(); };
+  });
+  const d = curDoc();
+  $("#vmeta").innerHTML = d ? `
+    <span class="eyebrow">${esc(d.role)}</span>
+    <span class="url" title="${esc(d.url)}">${esc(d.url)}</span>
+    <a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">live &nearr;</a>` : "";
+  renderVBody();
+  highlightRows();
+}
+async function renderVBody() {
+  const box = $("#vbody"), d = curDoc();
+  if (!d) { box.innerHTML = `<div class="vempty">No fetched documents for this target.</div>`; return; }
+  const docUrl = (v) => `/api/doc/${encodeURIComponent(S.tid)}/${encodeURIComponent(d.doc_id)}?view=${v}`;
+  if (S.view === "page") {
+    box.innerHTML = `<iframe sandbox="" referrerpolicy="no-referrer" src="${docUrl("page")}"></iframe>`;
+    return;
+  }
+  if (S.view === "raw") {
+    box.innerHTML = `<div id="vtext"><pre>loading&hellip;</pre></div>`;
+    const txt = await (await fetch(docUrl("raw"))).text();
+    if (curDoc() === d && S.view === "raw")
+      $("#vtext").innerHTML = `<pre>${esc(txt)}</pre>`;
+    return;
+  }
+  box.innerHTML = `<div id="vtext"><p style="color:var(--muted)">extracting text&hellip;</p></div>`;
+  const key = S.tid + "/" + d.doc_id;
+  let t = S.textCache.get(key);
+  if (!t) { t = await api(docUrl("text")); S.textCache.set(key, t); }
+  if (curDoc() !== d || S.view !== "text") return;
+  const segs = (t.segments || []).map((s) => `<p>${esc(s)}</p>`).join("");
+  $("#vtext").innerHTML = `<h1>${esc(t.title || d.doc_id)}</h1>` +
+    (segs || `<p style="color:var(--muted)">No text segments extracted - try the Page or Raw view.</p>`);
+}
+function setDoc(did) {
+  S.did = did;
+  const d = curDoc();
+  if (d && d.machine_readable && S.view === "text") S.view = "raw";
+  if (d && !d.machine_readable && S.view === "raw") S.view = "text";
+  renderViewer();
+}
+function highlightRows() {
+  document.querySelectorAll(".docrow").forEach((el) =>
+    el.classList.toggle("sel", el.dataset.did === S.did));
+}
+
+/* ------------------------------------------------------------------ steps */
+function renderTarget() {
+  const T = S.T;
+  const url = T.url || (T.docs[0] || {}).url || "";
+  $("#steps").innerHTML = `
+    <div class="thead">
+      <div class="eyebrow">${esc(T.target_type)} &middot; #${esc(T.label_order)}</div>
+      <div class="n">${esc(shortName(T.target_id))}</div>
+      <div class="u">${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>` : "(no source URL)"}</div>
+    </div>
+    ${stepBox(1, "Disclosing documents", step1Body(T))}
+    ${stepBox(2, "Typology facets", step2Body(T))}
+    ${stepBox(3, "Data-sharing clauses", step3Body(T))}
+    <button class="nextbtn" id="nextbtn">Next unfinished target &darr;</button>`;
+  bindStep1(); bindStep2(); bindStep3();
+  $("#nextbtn").addEventListener("click", gotoNextUnfinished);
+  renderStepTicks();
+}
+function stepBox(n, title, body) {
+  return `<section class="step" id="step${n}">
+    <div class="shead"><span class="eyebrow">Step ${n}</span><b>${title}</b>
+      <span class="tick" data-step="s${n}">&check; done</span></div>
+    <div class="sbody">${body}</div></section>`;
+}
+function renderStepTicks() {
+  if (!S.T) return;
+  document.querySelectorAll(".tick").forEach((el) => {
+    const done = S.T.steps[el.dataset.step];
+    el.classList.toggle("done", !!done);
+    el.innerHTML = done ? "&check; done" : "open";
+  });
+}
+
+/* ---- step 1: relevance + PP / structured-list identification ---- */
+function step1Body(T) {
+  const rows = T.docs.map((d) => {
+    const pred = d.manual ? "added by hand"
+      : d.predicted_relevant === "1" ? "pred: discloses" : "pred: no";
+    return `<div class="docrow" data-did="${esc(d.doc_id)}">
+      <div class="r1">
+        <button class="role" data-act="show" title="${esc(d.url)}">${esc(d.doc_id)}</button>
+        ${d.manual ? `<span class="mtag">manual</span>` : ""}
+        <span class="pred">${pred}</span>
+        <span class="seg" role="group" aria-label="discloses third parties">
+          <button class="yes ${d.gold_relevant === "1" ? "on" : ""}" data-act="rel1" title="discloses third parties (y)">yes</button>
+          <button class="no ${d.gold_relevant === "0" ? "on" : ""}" data-act="rel0" title="does not disclose (n)">no</button>
+        </span>
+      </div>
+      ${d.predicted_evidence ? `<div class="evi"><b>evidence:</b> ${esc(d.predicted_evidence)}</div>` : ""}
+      <div class="tagchips">
+        <button class="chip ${d.is_pp ? "on" : ""}" data-act="pp" title="mark as the privacy policy (p)">privacy policy</button>
+        <button class="chip ${d.is_list ? "on" : ""}" data-act="list" title="mark as a structured third-party list (l)">structured 3P list</button>
+        ${d.manual ? `<button class="rmbtn" data-act="rm" title="remove this manually added document">remove &times;</button>` : ""}
+      </div>
+    </div>`;
+  }).join("") || `<p class="hint">No fetched documents.</p>`;
+  const p = T.presence;
+  return `<p class="hint">Which fetched documents disclose third parties? Then mark which one(s)
+    are the privacy policy / a structured third-party list.</p>
+    ${rows}
+    <div class="addoc">
+      <div class="eyebrow">Add a document the fetcher missed</div>
+      <div class="addrow">
+        <input id="add-url" type="url" placeholder="https://&hellip; (paste from the live site)" spellcheck="false">
+        <label class="jslabel" title="fetch with a headless browser - for JS-only pages">
+          <input type="checkbox" id="add-render">JS</label>
+        <button id="add-btn">fetch + add</button>
+      </div>
+      <div class="adderr" id="add-err"></div>
+    </div>
+    <div class="presence">
+      <p class="hint">Regardless of what was fetched - check the live site if unsure:</p>
+      <div class="prow"><span class="q">A privacy policy exists for this target</span>
+        ${presSeg("pp", p.gold_pp_present)}</div>
+      <div class="prow"><span class="q">A structured third-party list exists (vendor list, subprocessors, ads.txt &hellip;)</span>
+        ${presSeg("list", p.gold_list_present)}</div>
+      <textarea class="notes" id="pres-notes" rows="1"
+        placeholder="target notes (presence / fetching)">${esc(p.notes)}</textarea>
+    </div>`;
+}
+function presSeg(kind, val) {
+  return `<span class="seg" data-pres="${kind}">
+    <button class="yes ${val === "1" ? "on" : ""}" data-v="1">yes</button>
+    <button class="no ${val === "0" ? "on" : ""}" data-v="0">no</button></span>`;
+}
+function bindStep1() {
+  document.querySelectorAll("#step1 .docrow").forEach((row) => {
+    const did = row.dataset.did;
+    row.querySelectorAll("[data-act]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.dataset.act === "show") setDoc(did);
+        else if (btn.dataset.act === "rel1") setRelevance(did, "1");
+        else if (btn.dataset.act === "rel0") setRelevance(did, "0");
+        else if (btn.dataset.act === "pp") toggleTag(did, "pp");
+        else if (btn.dataset.act === "list") toggleTag(did, "list");
+        else if (btn.dataset.act === "rm") removeDoc(did);
+      });
+    });
+  });
+  const addBtn = $("#add-btn");
+  if (addBtn) {
+    addBtn.addEventListener("click", addDoc);
+    $("#add-url").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addDoc(); }
+    });
+  }
+  document.querySelectorAll("#step1 .presence .seg").forEach((seg) => {
+    seg.querySelectorAll("button").forEach((btn) =>
+      btn.addEventListener("click", () => setPresence(seg.dataset.pres, btn.dataset.v)));
+  });
+  bindNotes("#pres-notes", (v) => {
+    S.T.presence.notes = v;
+    return save({ sheet: "presence", target_id: S.tid, notes: v });
+  });
+}
+function setRelevance(did, val) {
+  const d = S.T.docs.find((x) => x.doc_id === did);
+  if (!d) return;
+  d.gold_relevant = d.gold_relevant === val ? "" : val;   // click again to clear
+  save({ sheet: "relevance", target_id: S.tid, doc_id: did, gold_relevant: d.gold_relevant });
+  renderTarget(); renderViewer();
+}
+function toggleTag(did, kind) {
+  const d = S.T.docs.find((x) => x.doc_id === did);
+  if (!d) return;
+  const key = kind === "pp" ? "is_pp" : "is_list";
+  d[key] = !d[key];
+  const ids = S.T.docs.filter((x) => x[key]).map((x) => x.doc_id).join(";");
+  const payload = { sheet: "presence", target_id: S.tid };
+  payload[kind === "pp" ? "gold_pp_doc_ids" : "gold_list_doc_ids"] = ids;
+  // Tagging a doc implies the artefact exists; never auto-clears.
+  const presKey = kind === "pp" ? "gold_pp_present" : "gold_list_present";
+  if (d[key] && S.T.presence[presKey] !== "1") {
+    S.T.presence[presKey] = "1";
+    payload[presKey] = "1";
+  }
+  save(payload);
+  renderTarget();
+}
+async function reloadTarget(selectDoc) {
+  const d = await api("/api/target/" + encodeURIComponent(S.tid));
+  S.T = d;
+  if (selectDoc && d.docs.some((x) => x.doc_id === selectDoc)) S.did = selectDoc;
+  else if (!d.docs.some((x) => x.doc_id === S.did)) S.did = (d.docs[0] || {}).doc_id || null;
+  const cur = curDoc();
+  if (cur && cur.machine_readable && S.view === "text") S.view = "raw";
+  if (cur && !cur.machine_readable && S.view === "raw") S.view = "text";
+  const t = S.targets.find((x) => x.target_id === S.tid);
+  if (t) t.steps = d.steps;
+  renderQueue(); renderTarget(); renderViewer();
+}
+async function addDoc() {
+  const url = $("#add-url").value.trim();
+  if (!url) return;
+  const btn = $("#add-btn");
+  btn.disabled = true; btn.textContent = "fetching…";
+  $("#add-err").textContent = "";
+  try {
+    const r = await fetch("/api/add_doc", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_id: S.tid, url, render: $("#add-render").checked }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    S.progress = data.progress; renderMeters();
+    badge("Added " + data.doc_id);
+    await reloadTarget(data.doc_id);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "fetch + add";
+    $("#add-err").textContent = e.message;
+  }
+}
+async function removeDoc(did) {
+  if (!confirm(`Remove ${did} and its gold label?`)) return;
+  try {
+    const r = await fetch("/api/remove_doc", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_id: S.tid, doc_id: did }) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    S.progress = data.progress; renderMeters();
+    S.textCache.delete(S.tid + "/" + did);
+    badge("Removed " + did);
+    await reloadTarget(null);
+  } catch (e) { badge("Remove failed: " + e.message, true); }
+}
+function setPresence(kind, val) {
+  const key = kind === "pp" ? "gold_pp_present" : "gold_list_present";
+  const cur = S.T.presence[key];
+  S.T.presence[key] = cur === val ? "" : val;
+  save({ sheet: "presence", target_id: S.tid, [key]: S.T.presence[key] });
+  renderTarget();
+}
+
+/* ---- step 2: typology facets ---- */
+function step2Body(T) {
+  const docs = T.docs.filter((d) => d.gold_relevant === "1");
+  if (!docs.length)
+    return `<p class="hint">No documents marked as disclosing yet - finish step 1 first.
+      Facets are only labelled for disclosing documents.</p>`;
+  return `<p class="hint">For each disclosing document: in which medium, and how specifically,
+    are third parties disclosed? Dashed cells are the classifier's prediction.</p>` +
+    docs.map((d) => {
+      const gold = new Set((d.gold_facets || "").split(";").filter((x) => x && x !== "none"));
+      const pred = new Set((d.predicted_doc_facets || "").split(";").filter(Boolean));
+      const isNone = (d.gold_facets || "").trim().toLowerCase() === "none";
+      const grid = `<table class="facetgrid"><tr><th></th>${SPECS.map((s) => `<th>${s}</th>`).join("")}</tr>` +
+        MEDIA.map((m) => `<tr><th class="rowh">${MEDIA_SHORT[m]}</th>` + SPECS.map((sp) => {
+          const code = m + ":" + sp;
+          return `<td><button class="fcell ${gold.has(code) ? "on" : pred.has(code) ? "pred" : ""}"
+            data-code="${code}" title="${code}${pred.has(code) ? " (predicted)" : ""}"></button></td>`;
+        }).join("") + "</tr>").join("") + "</table>";
+      return `<div class="docrow" data-did="${esc(d.doc_id)}">
+        <div class="r1"><button class="role" data-act="show">${esc(d.doc_id)}</button>
+          ${d.manual ? `<span class="mtag">manual</span>` : ""}
+          <span class="pred">${d.manual ? "no prediction (not fetched by the tool)"
+            : esc(d.predicted_doc_facets || "no prediction")}</span></div>
+        ${grid}
+        <div class="fnone"><button class="chip ${isNone ? "on" : ""}" data-act="none"
+          title="relevant but no facet applies">no facets (none)</button></div>
+        <textarea class="notes" rows="1" placeholder="typology notes">${esc(d.typology_notes)}</textarea>
+      </div>`;
+    }).join("");
+}
+function bindStep2() {
+  document.querySelectorAll("#step2 .docrow").forEach((row) => {
+    const did = row.dataset.did;
+    const d = S.T.docs.find((x) => x.doc_id === did);
+    row.querySelector('[data-act="show"]').addEventListener("click", () => setDoc(did));
+    row.querySelectorAll(".fcell").forEach((cell) =>
+      cell.addEventListener("click", () => {
+        const gold = new Set((d.gold_facets || "").split(";").filter((x) => x && x !== "none"));
+        if (gold.has(cell.dataset.code)) gold.delete(cell.dataset.code);
+        else gold.add(cell.dataset.code);
+        d.gold_facets = [...gold].sort().join(";");
+        save({ sheet: "typology", target_id: S.tid, doc_id: did, gold_facets: d.gold_facets });
+        renderTarget();
+      }));
+    row.querySelector('[data-act="none"]').addEventListener("click", () => {
+      d.gold_facets = d.gold_facets.trim().toLowerCase() === "none" ? "" : "none";
+      save({ sheet: "typology", target_id: S.tid, doc_id: did, gold_facets: d.gold_facets });
+      renderTarget();
+    });
+    bindNotes(row.querySelector("textarea"), (v) => {
+      d.typology_notes = v;
+      return save({ sheet: "typology", target_id: S.tid, doc_id: did,
+                    gold_facets: d.gold_facets, notes: v });
+    });
+  });
+}
+
+/* ---- step 3: data-sharing clauses ---- */
+function step3Body(T) {
+  if (!T.clauses.length)
+    return `<p class="hint">No extracted data-sharing clauses for this target
+      (PoliGraph found none, or the propagation sheet is absent).</p>`;
+  return `<p class="hint">Each clause: does propagating the stated data type to its
+    sub-types hold for this sharing relationship?</p>` +
+    T.clauses.map((c, i) => {
+      const props = (c.predicted_propagated || "").split(";").filter(Boolean);
+      return `<div class="clause" data-i="${i}">
+        <div class="rel">shares <b>${esc(c.data_type)}</b> with <b>${esc(c.entity)}</b></div>
+        <div class="prop">${props.length
+          ? props.map((p) => `<span>${esc(p)}</span>`).join("")
+          : `<span class="none">no sub-types propagate</span>`}</div>
+        <div class="r1" style="display:flex;gap:8px;align-items:center">
+          <span class="q" style="flex:1;font-size:12px">Propagation correct?</span>
+          <span class="seg">
+            <button class="yes ${c.gold_correct === "1" ? "on" : ""}" data-v="1">yes</button>
+            <button class="no ${c.gold_correct === "0" ? "on" : ""}" data-v="0">no</button></span>
+        </div>
+        <textarea class="notes" rows="1" placeholder="clause notes">${esc(c.notes)}</textarea>
+      </div>`;
+    }).join("");
+}
+function bindStep3() {
+  document.querySelectorAll("#step3 .clause").forEach((box) => {
+    const c = S.T.clauses[+box.dataset.i];
+    box.querySelectorAll(".seg button").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        c.gold_correct = c.gold_correct === btn.dataset.v ? "" : btn.dataset.v;
+        save({ sheet: "propagation", clause_id: c.clause_id, gold_correct: c.gold_correct });
+        renderTarget();
+      }));
+    bindNotes(box.querySelector("textarea"), (v) => {
+      c.notes = v;
+      return save({ sheet: "propagation", clause_id: c.clause_id,
+                    gold_correct: c.gold_correct, notes: v });
+    });
+  });
+}
+
+/* ------------------------------------------------------------------ misc */
+function bindNotes(elOrSel, fn) {
+  const el = typeof elOrSel === "string" ? $(elOrSel) : elOrSel;
+  if (!el) return;
+  let timer = null;
+  el.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(el.value), 600);
+  });
+  el.addEventListener("change", () => {   // flush on blur so a re-render can't drop it
+    clearTimeout(timer);
+    fn(el.value);
+  });
+}
+function gotoNextUnfinished() {
+  const order = S.targets;
+  const start = order.findIndex((t) => t.target_id === S.tid);
+  for (let k = 1; k <= order.length; k++) {
+    const t = order[(start + k) % order.length];
+    if (!stepsDone(t)) { loadTarget(t.target_id); return; }
+  }
+  badge("All targets finished");
+}
+function stepTarget(delta) {
+  const list = S.targets.filter((t) => S.filter === "all" || !stepsDone(t) || t.target_id === S.tid);
+  const i = list.findIndex((t) => t.target_id === S.tid);
+  const next = list[i + delta];
+  if (next) loadTarget(next.target_id);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.target.matches("textarea, input") || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!S.T) return;
+  if (e.key === "[") { stepTarget(-1); }
+  else if (e.key === "]") { stepTarget(1); }
+  else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    const i = S.T.docs.findIndex((d) => d.doc_id === S.did);
+    const next = S.T.docs[i + (e.key === "ArrowRight" ? 1 : -1)];
+    if (next) setDoc(next.doc_id);
+  }
+  else if (e.key === "y" && S.did) setRelevance(S.did, "1");
+  else if (e.key === "n" && S.did) setRelevance(S.did, "0");
+  else if (e.key === "p" && S.did) toggleTag(S.did, "pp");
+  else if (e.key === "l" && S.did) toggleTag(S.did, "list");
+  else return;
+  e.preventDefault();
+});
+
+$("#f-all").addEventListener("click", () => { S.filter = "all"; setFilterButtons(); renderQueue(); });
+$("#f-todo").addEventListener("click", () => { S.filter = "todo"; setFilterButtons(); renderQueue(); });
+function setFilterButtons() {
+  $("#f-all").classList.toggle("on", S.filter === "all");
+  $("#f-todo").classList.toggle("on", S.filter === "todo");
+}
+
+(async function init() {
+  const st = await api("/api/state");
+  S.targets = st.targets; S.progress = st.progress;
+  $("#corpusname").textContent = `${S.targets.length} targets in queue`;
+  renderMeters(); renderQueue();
+  const first = S.targets.find((t) => !stepsDone(t)) || S.targets[0];
+  if (first) loadTarget(first.target_id);
+})();
+</script>
+</body>
+</html>

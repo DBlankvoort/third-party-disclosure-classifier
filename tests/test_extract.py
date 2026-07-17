@@ -67,6 +67,14 @@ class TestParseHtml:
         doc = parse_html(html)
         assert any("share data with partners" in s for s in doc.segments)
 
+    def test_div_text_segmented_despite_dominant_block_filler(self):
+        filler = "<p>" + "Lorem ipsum dolor sit amet consectetur. " * 8 + "</p>"
+        html = (f"<html><body>{filler}{filler}"
+                "<div><div>We may sell your personal information.</div></div>"
+                "</body></html>")
+        doc = parse_html(html)
+        assert any("sell your personal information" in s for s in doc.segments)
+
     def test_identifier_cells_excluded_from_name_cells(self):
         html = """
         <table>

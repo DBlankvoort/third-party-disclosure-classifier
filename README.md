@@ -82,9 +82,10 @@ Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for argumen
 | `tpd/extract.py` | HTML → segments/tables/links representations |
 | `tpd/collect/` | Crawler |
 | `tpd/classify/` | Relevance, document-class, specificity, and typology classifiers |
-| `tpd/poligraph/` | PoliGraph re-implementation (creating data sharing graphs for policies) |
+| `tpd/poligraph/` | PoliGraph re-implementation |
 | `tpd/polisis/` | Polisis-style hierarchical classifiers |
 | `tpd/evaluate/` | Labelling sheets and agreement/latency metrics |
+| `tpd/annotate/` | Manual gold-labelling |
 | `firefox-extension/` | Browser extension code |
 | `tests/` | Pytest suite for the codebase |
 

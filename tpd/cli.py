@@ -306,6 +306,20 @@ def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
 
 
 # --------------------------------------------------------------------------- #
+@cli.command()
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--labels", "labels_dir", required=True,
+              help="sheet directory produced by `tpd label` (gold is written back here)")
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", type=int, default=8765, show_default=True)
+def annotate(corpus_root, labels_dir, host, port) -> None:
+    """Serve the gold-labelling interface."""
+    from .annotate import run_server
+
+    run_server(corpus_root, labels_dir, host=host, port=port)
+
+
+# --------------------------------------------------------------------------- #
 @cli.command(name="polisis-cache")
 @click.option("--corpus", "corpus_root", required=True)
 @click.option("--models-root", default=None, help="path to POLISIS models")

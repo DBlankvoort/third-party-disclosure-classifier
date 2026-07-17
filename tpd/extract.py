@@ -280,6 +280,8 @@ class _TreeBuilder:
         own = self._own_text(el)
         if not own:
             return
+        if len(own) >= 3:
+            self.block_texts.append(own)
         parent = self._heading_parent(7)  # closest heading
         for s in _SENT_RE.split(own):
             s = s.strip()

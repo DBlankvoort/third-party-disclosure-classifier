@@ -51,6 +51,15 @@ SHARING_VERBS = [
 ]
 SHARING_RE = re.compile(r"\b(" + "|".join(SHARING_VERBS) + r")\b", re.I)
 
+SALE_OF_DATA_RE = re.compile(
+    r"\b(?:sell(?:s|ing)?|sold|rent(?:s|ing|ed)?)\b"
+    r"[^.;:!?]{0,60}?\b(?:personal\s+(?:information|data)|information|data)\b",
+    re.I,
+)
+
+# "stop/cease selling ..." is not an affirmative sale.
+_SALE_STOP_RE = re.compile(r"\b(?:stop(?:s|ped)?|ceas(?:e|es|ed)|discontinu\w+)\s+$", re.I)
+
 COLLECTION_VERBS = [
     r"collect(?:s|ed|ing)?", r"track(?:s|ed|ing)?", r"gather(?:s|ed|ing)?",
     r"obtain(?:s|ed|ing)?", r"receiv(?:e|es|ed|ing)",
@@ -397,6 +406,17 @@ def positive_sharing(segment: str) -> bool:
 def positive_collection(segment: str) -> bool:
     """True iff a segment makes at least one affirmative collection claim."""
     return _affirmative(segment, COLLECTION_RE)
+
+
+def implicit_sale(segment: str) -> bool:
+    """True iff a segment affirms selling/renting user data."""
+    for m in SALE_OF_DATA_RE.finditer(segment):
+        if is_negated(segment, m.start()):
+            continue
+        if _SALE_STOP_RE.search(segment[:m.start()]):
+            continue
+        return True
+    return False
 
 
 

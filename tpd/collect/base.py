@@ -11,6 +11,8 @@ from pathlib import Path
 
 import requests
 
+from .pdf import looks_like_pdf, pdf_to_html
+
 _TRANSIENT_STATUSES = {0, 429, 500, 502, 503, 504}
 
 USER_AGENT = (
@@ -160,10 +162,14 @@ def fetch(
     try:
         resp = _SESSION.get(url, timeout=timeout, allow_redirects=True)
         ctype = resp.headers.get("Content-Type", "")
-        # Keep HTML/text and JSON.
-        text = resp.text if (
-            "html" in ctype or "text" in ctype or "json" in ctype or not ctype
-        ) else ""
+        if looks_like_pdf(ctype, head=resp.content[:5]):
+            # PDF policies are captured as minimal HTML.
+            text = pdf_to_html(resp.content)
+        else:
+            # Keep HTML/text and JSON.
+            text = resp.text if (
+                "html" in ctype or "text" in ctype or "json" in ctype or not ctype
+            ) else ""
         result = FetchResult(
             url=url,
             status=resp.status_code,

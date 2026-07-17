@@ -12,6 +12,7 @@ from ..lexicons import (
     GENERIC_RE,
     POINTER_RE,
     clause_window,
+    implicit_sale,
     machine_readable_kind,
     positive_collection,
     positive_sharing,
@@ -206,6 +207,10 @@ def _scan_prose(
         orgs = _party_orgs(seg, orgs)
         cats = _category_matches(seg, orgs)
         generic = _bare_generic(seg, orgs)
+        # A sale of user data with no stated recipient discloses an unnamed
+        # third party.
+        if not (orgs or cats or generic) and implicit_sale(seg):
+            generic = True
         if orgs:
             scan.specificities.add(Specificity.NAMED)
             orgs_all.extend(orgs)

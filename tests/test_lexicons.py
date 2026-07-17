@@ -11,6 +11,7 @@ from tpd.lexicons import (
     SHARING_RE,
     _affirmative,
     clause_window,
+    implicit_sale,
     machine_readable_kind,
     positive_collection,
     positive_sharing,
@@ -104,6 +105,29 @@ class TestAffirmative:
         assert not positive_sharing("we do not share data")
         assert positive_collection("we collect your email")
         assert not positive_collection("we do not collect your email")
+
+
+# --------------------------------------------------------------------------- #
+# implicit_sale
+# --------------------------------------------------------------------------- #
+class TestImplicitSale:
+    def test_ccpa_style_sale(self):
+        assert implicit_sale(
+            "As permitted by applicable law, we may sell your personal information."
+        )
+        assert implicit_sale("We may rent or sell information about our users.")
+
+    def test_negated_sale(self):
+        assert not implicit_sale("We do not sell your personal information.")
+        assert not implicit_sale("Do Not Sell My Personal Information")
+
+    def test_stopping_a_sale_is_not_a_sale(self):
+        assert not implicit_sale(
+            "You may direct us to stop selling your personal information."
+        )
+
+    def test_sale_of_non_data_is_not_a_disclosure(self):
+        assert not implicit_sale("We sell products and services worldwide.")
 
 
 # --------------------------------------------------------------------------- #
