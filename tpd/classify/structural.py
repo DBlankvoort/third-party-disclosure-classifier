@@ -16,6 +16,9 @@ LONG_TABLE_ROWS = 12
 # Min number of header tokens for a sub-processor table.
 SUBPROC_HEADER_MIN = 2
 
+# Max header tokens for a data table.
+SUBPROC_HEADER_MAX = 40
+
 # Header tokens which suggest subprocessor table status.
 SUBPROCESSOR_TABLE_HEADERS = {
     "name", "subprocessor", "sub-processor", "vendor", "company", "entity",
@@ -61,7 +64,7 @@ class StructuralSignals:
 
 def _looks_like_subprocessor_table(doc: Document) -> bool:
     for t in doc.tables:
-        if t.n_rows < 3:
+        if t.n_rows < 3 or len(t.header_tokens) > SUBPROC_HEADER_MAX:
             continue
         overlap = t.header_tokens & SUBPROCESSOR_TABLE_HEADERS
         if len(overlap) >= SUBPROC_HEADER_MIN and overlap & _SUBPROC_STRONG:

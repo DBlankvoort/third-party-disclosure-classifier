@@ -12,7 +12,9 @@ from ..lexicons import (
     GENERIC_RE,
     POINTER_RE,
     clause_window,
+    has_first_party_anchor,
     implicit_sale,
+    is_negated,
     machine_readable_kind,
     positive_collection,
     positive_sharing,
@@ -77,6 +79,8 @@ def _bare_generic(seg: str, orgs: list[str]) -> bool:
     for m in GENERIC_RE.finditer(seg):
         if any(a <= m.start() and m.end() <= b for a, b in cat_spans):
             continue
+        if is_negated(seg, m.start()):
+            continue
         if orgs and re.search(r"\b(?:a|an)\s+$", seg[:m.start()], re.I):
             nxt = re.match(r"\s+([A-Za-z-]+)", seg[m.end():])
             if nxt and nxt.group(1).lower() not in _GEN_POST_STOP:
@@ -91,14 +95,36 @@ _ORG_QUALIFIER_RE = re.compile(
 )
 _ORG_COLLECT_WINDOW = 70
 
+_DOMAIN_ORG_RE = re.compile(
+    r"(?<![-.\w])([a-z0-9][a-z0-9-]{1,40}\.(?:com|net|org|io|ai|app|dev))\b", re.I
+)
+_DOMAIN_LINK_PRE_RE = re.compile(
+    r"(?:https?://|www\.|@|(?:at|visit|see|via|from)\s+)$", re.I
+)
+
+
+def _domain_orgs(seg: str, first_party: set[str] | None) -> list[str]:
+    """Domain-name org surfaces in ``seg`` that are not links or first party."""
+    from .named_entities import _is_first_party
+
+    out = []
+    for m in _DOMAIN_ORG_RE.finditer(seg):
+        if _DOMAIN_LINK_PRE_RE.search(seg[:m.start()]):
+            continue
+        d = m.group(1).lower()
+        if not _is_first_party(d, first_party):
+            out.append(d)
+    return out
+
 
 def _org_collects(seg: str, names: set[str]) -> bool:
     """A known org described as itself collecting."""
     from .named_entities import _GAZ_RE
 
-    for m in _GAZ_RE.finditer(seg):
-        if m.group(0).lower() not in names:
-            continue
+    mentions = [m for m in _GAZ_RE.finditer(seg) if m.group(0).lower() in names]
+    mentions += [m for m in _DOMAIN_ORG_RE.finditer(seg)
+                 if m.group(1).lower() in names]
+    for m in mentions:
         if re.search(r"\bby\s+$", seg[:m.start()], re.I):
             continue
         post = seg[m.end():]
@@ -109,10 +135,11 @@ def _org_collects(seg: str, names: set[str]) -> bool:
     return False
 
 
-def _org_disclosure_context(seg: str) -> bool:
+def _org_disclosure_context(seg: str, first_party: set[str] | None = None) -> bool:
     """Disclosure contexts that name third parties without a sharing verb."""
     names = {n for n, _ in gazetteer_orgs(seg)}
     names = set(_party_orgs(seg, sorted(names)))
+    names |= {d for d in _domain_orgs(seg, first_party)}
     if not names:
         return False
     if EXEMPLIFIER_RE.search(seg) and (_category_matches(seg, []) or GENERIC_RE.search(seg)):
@@ -131,6 +158,8 @@ def _category_matches(seg: str, orgs: list[str]) -> list[str]:
     out = []
     for m in CATEGORY_RE.finditer(seg):
         term = m.group(0).lower()
+        if is_negated(seg, m.start()):
+            continue
         if term in ("partner", "partners") and seg[m.end():].lstrip().lower().startswith("with"):
             continue
         # "Exclude talk about the user's ISP.
@@ -161,6 +190,19 @@ def _party_orgs(seg: str, orgs: list[str]) -> list[str]:
         kept.append(o)
     return kept
 
+_MAX_SEG_LEN = 600
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _sentence_segments(segments) -> list[str]:
+    out: list[str] = []
+    for seg in segments:
+        if len(seg) <= _MAX_SEG_LEN:
+            out.append(seg)
+        else:
+            out.extend(p for p in _SENT_SPLIT_RE.split(seg) if p.strip())
+    return out
+
 
 def _scan_prose(
     doc: Document,
@@ -175,15 +217,17 @@ def _scan_prose(
     # Disclosure-context segments only.
     qualifying: list[str] = []
     inherit = 0
-    for seg in doc.segments[:MAX_SEGMENTS]:
+    for seg in _sentence_segments(doc.segments[:MAX_SEGMENTS]):
         if _nav_junk(seg):
             continue
         # Do not consider informational headings pointing elsewhere.
         if _INFO_HEADING_RE.match(seg.strip()):
             continue
-        q = positive_sharing(seg) or third_party_collects(seg)
+        q = positive_sharing(seg) or third_party_collects(seg) or implicit_sale(seg)
         if not q and policy_ctx:
-            q = _org_disclosure_context(seg)
+            q = _org_disclosure_context(seg, first_party)
+        if q and not policy_ctx and not has_first_party_anchor(seg):
+            q = False
         if q:
             qualifying.append(seg)
             # Check qualifying lead-ins.
@@ -205,6 +249,9 @@ def _scan_prose(
             seg, first_party=first_party, prose_precision=True, ner_ents=ents
         )
         orgs = _party_orgs(seg, orgs)
+        for d in _domain_orgs(seg, first_party):
+            if d not in orgs and _org_collects(seg, {d}):
+                orgs.append(d)
         cats = _category_matches(seg, orgs)
         generic = _bare_generic(seg, orgs)
         # A sale of user data with no stated recipient discloses an unnamed
@@ -286,6 +333,8 @@ _POLICY_CTX_ROLES = {
     "subprocessor_list", "vendor_list",
 }
 
+_PLATFORM_LABEL_ROLES = {"store_listing", "play_data_safety", "app_privacy"}
+
 
 def _policy_table_orgs(doc: Document, first_party: set[str] | None) -> list[str]:
     """Named third parties from vendor/provider tables embedded in a prose policy."""
@@ -344,14 +393,17 @@ def specificities_in_doc(
     policy_ctx = role in _POLICY_CTX_ROLES
 
     if medium is Medium.STRUCTURED:
-        scan = _scan_prose(doc, ner_fn, first_party=first_party, policy_ctx=policy_ctx)
+        label = parse_platform_label(doc.text, role=role)
+        if label.has_label and role in _PLATFORM_LABEL_ROLES:
+            scan = SpecScan()
+        else:
+            scan = _scan_prose(doc, ner_fn, first_party=first_party, policy_ctx=policy_ctx)
         # Named orgs in the structure's tables, or enumerated in a flat vendor list.
         struct_orgs = set(structural.table_named_orgs) | set(structural.list_named_orgs)
         if struct_orgs:
             scan.specificities.add(Specificity.NAMED)
             scan.named_orgs = sorted(set(scan.named_orgs) | struct_orgs)
         # Generic data sharing clauses in app stores.
-        label = parse_platform_label(doc.text, role=role)
         if label.has_label and label.shares and not scan.specificities:
             scan.specificities.add(Specificity.GENERIC)
             if not scan.evidence:

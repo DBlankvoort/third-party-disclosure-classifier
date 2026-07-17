@@ -178,6 +178,9 @@ _GENERIC_DOMAIN_LABELS = {
     "go", "or", "ne", "store", "online", "site", "web", "info", "biz", "me",
     "privacy", "policy", "policies", "legal", "support", "help", "static",
     "cdn", "assets", "page", "pages", "sites", "google", "play",
+    "github", "githubusercontent", "docs", "pastebin", "blogspot", "wordpress",
+    "wixsite", "weebly", "webnode", "notion", "netlify", "vercel", "herokuapp",
+    "firebaseapp", "appspot", "webflow", "squarespace", "tumblr", "medium",
 }
 
 

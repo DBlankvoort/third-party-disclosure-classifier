@@ -10,7 +10,7 @@ import re
 CATEGORY_PATTERNS = [
     # "advertisers" is a category; "advertising" is not unless it heads a partner noun.
     r"advertisers?",
-    r"advertising\s+(?:partner|network|compan(?:y|ies)|service|provider|vendor|agenc(?:y|ies)|platform)s?",
+    r"advertis(?:ing|ement)\s+(?:partner|network|compan(?:y|ies)|service|provider|vendor|agenc(?:y|ies)|platform)s?",
     r"ad networks?", r"ad servers?", r"ad(?:[- ]?tech)\s+(?:partner|vendor|compan(?:y|ies))s?",
     r"(?:third[- ]party\s+)?service providers?",
     r"sub[- ]?processors?",
@@ -44,7 +44,7 @@ GENERIC_RE = re.compile(r"\b(" + "|".join(GENERIC_PATTERNS) + r")\b", re.I)
 # --------------------------------------------------------------------------- #
 SHARING_VERBS = [
     r"shar(?:e|es|ed|ing)", r"disclos(?:e|es|ed|ure|ing)",
-    r"sell(?:s|ing)?", r"sold", r"rent(?:s|ed|ing)?",
+    r"divulg(?:e|es|ed|ing)",
     r"provid(?:e|es|ed|ing)\s+(?:to|with)", r"transfer(?:s|red|ring)?",
     r"mak(?:e|es|ing)\s+available", r"give\s+access", r"allow\s+access",
     r"(?:we|us|our|they)\s+(?:also\s+)?work\s+with", r"partner\s+with",
@@ -435,16 +435,25 @@ def _party_follows(segment: str, end: int) -> bool:
     return bool(GENERIC_RE.search(w) or CATEGORY_RE.search(w))
 
 
+def has_first_party_anchor(segment: str) -> bool:
+    """True iff the segment references the first party."""
+    return bool(_FP_ANCHOR_RE.search(segment))
+
+
 def third_party_collects(segment: str) -> bool:
     """True iff a third party is described as the collector in the given segment."""
     anchored = bool(_FP_ANCHOR_RE.search(segment))
     for pm in GENERIC_RE.finditer(segment):
+        if is_negated(segment, pm.start()):
+            continue
         window = clause_window(segment, pm.end(), _TP_COLLECT_WINDOW)
         if _affirmative(window, COLLECTION_RE):
             return True
     # Category-party and tracker-attribution shapes additionally require a first-party anchor.
     if anchored and _DATA_NOUN_RE.search(segment):
         for pm in CATEGORY_RE.finditer(segment):
+            if is_negated(segment, pm.start()):
+                continue
             window = clause_window(segment, pm.end(), _TP_COLLECT_WINDOW)
             if _affirmative(window, COLLECTION_RE):
                 return True

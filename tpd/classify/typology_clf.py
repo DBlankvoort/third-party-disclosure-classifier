@@ -13,6 +13,36 @@ from .structural import structural_signals
 # Minimum extracted text for a document to support a confident read.
 DECISIVE_MIN_TEXT = 1500
 
+# Generic policies
+_PLATFORM_POLICIES = [
+    ("docs.github.com", "/", "github"),
+    ("github.com", "/site-policy", "github"),
+    ("policies.google.com", "/", "google"),
+    ("www.facebook.com", "/privacy", "facebook"),
+    ("www.facebook.com", "/policy", "facebook"),
+    ("www.apple.com", "/legal/privacy", "apple"),
+    ("automattic.com", "/privacy", "automattic"),
+    ("wordpress.com", "/privacy", "wordpress"),
+    ("twitter.com", "/privacy", "twitter"),
+    ("x.com", "/privacy", "x"),
+]
+
+
+def _generic_platform_policy(url: str, first_party: set[str] | None) -> bool:
+    """True iff ``url`` is a platform's own policy and the target is not the platform."""
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url or "")
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or "/"
+    for p_host, p_path, brand in _PLATFORM_POLICIES:
+        if host == p_host and path.startswith(p_path):
+            return brand not in (first_party or set())
+    return False
+
 
 @dataclass
 class DocClassification:
@@ -71,6 +101,16 @@ def classify_document(
         doc_class_reason=doc_class.reason,
         structural_fired=list(structural.fired),
     )
+
+    if doc_class.reason == "parked_domain":
+        out.decisive = True
+        return out
+
+    if _generic_platform_policy(url, first_party):
+        out.doc_class_reason = "platform_policy"
+        out.evidence = "another platform's own generic policy"
+        out.decisive = True
+        return out
 
     if doc_class.medium is None:
         # Not a recognisable disclosure document.

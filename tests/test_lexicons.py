@@ -46,8 +46,14 @@ class TestCategoryLexicon:
 class TestVerbLexicons:
     def test_sharing_verbs(self):
         for seg in ("we share your data", "information is disclosed",
-                    "we sell personal information", "we transfer data abroad"):
+                    "we transfer data abroad"):
             assert SHARING_RE.search(seg), seg
+
+    def test_bare_sell_is_not_a_sharing_verb(self):
+        from tpd.lexicons import implicit_sale
+
+        assert not SHARING_RE.search("you will be required to sell a range of products")
+        assert implicit_sale("we sell personal information")
 
     def test_provide_requires_to_or_with(self):
         assert SHARING_RE.search("we provide to our partners your data")
@@ -76,9 +82,9 @@ class TestAffirmative:
             "we do not share your data except with our service providers",
             SHARING_RE,
         )
-        assert _affirmative(
-            "we never sell your information unless you consent", SHARING_RE
-        )
+        from tpd.lexicons import implicit_sale
+
+        assert implicit_sale("we never sell your information unless you consent")
 
     def test_negation_does_not_leak_across_sentence_boundary(self):
         assert _affirmative(

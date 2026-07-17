@@ -111,6 +111,18 @@ def _named_examples(graph, entity: str, limit: int = 5) -> list[str]:
     return sorted(out)[:limit]
 
 
+_NON_ACTOR_TAILS = {
+    "act", "law", "laws", "regulation", "regulations", "directive",
+    "directives", "statute", "statutes", "legislation",
+    "transfer", "transfers", "engineer", "engineers",
+}
+
+
+def _non_actor_entity(entity: str) -> bool:
+    words = entity.split()
+    return bool(words) and words[-1] in _NON_ACTOR_TAILS
+
+
 def relations_from_graph(
     graph,
     first_party: set[str] | None = None,
@@ -121,6 +133,8 @@ def relations_from_graph(
 
     relations: list[dict] = []
     for e in graph.collect_edges(include_negative=True):
+        if _non_actor_entity(e.entity):
+            continue
         fp = _is_first_party_entity(e.entity, first_party)
         relations.append({
             "entity": e.entity,

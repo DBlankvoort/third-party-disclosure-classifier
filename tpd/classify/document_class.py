@@ -45,6 +45,16 @@ MIN_POLICY_CUES = 4
 # Minimum visible text for a confident prose read.
 MIN_PROSE_TEXT = 600
 
+# For sale etc.
+_PARKED_RE = re.compile(
+    r"hugedomains|(?:this |the )?domain (?:name )?(?:is|may be) for sale|"
+    r"buy this domain|domain for sale|sedo\.com|dan\.com|afternic|"
+    r"parked (?:free )?(?:courtesy|domain)|godaddy auctions",
+    re.I,
+)
+# How much of the document to scan for for sale etc. fingerprints.
+_PARKED_SCAN = 3000
+
 @dataclass
 class DocClass:
     """The medium of a document (or ``None``) + evidence."""
@@ -127,6 +137,11 @@ def classify_medium(
         structural = structural_signals(doc, role=role)
     dc = DocClass(structural=structural)
 
+    # 0. for-sale
+    if _PARKED_RE.search(f"{doc.title} {(doc.text or '')[:_PARKED_SCAN]}"):
+        dc.reason = "parked_domain"
+        return dc
+
     # 1. machine_readable
     # Kinds sit at the top, so a prefix is sufficient.
     kind = lexicons.machine_readable_kind((doc.raw or doc.text)[:200_000])
@@ -152,9 +167,10 @@ def classify_medium(
     is_prose, prose_reason = _policy_prose(text, role, doc)
 
     # 3. other_doc
-    if (structural.help_doc or structural.partners_page) and not (
-        role in _POLICY_ROLES and is_prose
-    ):
+    prose_wins = is_prose and (
+        role in _POLICY_ROLES or _PRIVACY_TITLE_RE.search(doc.title or "")
+    )
+    if (structural.help_doc or structural.partners_page) and not prose_wins:
         dc.medium = Medium.OTHER_DOC
         dc.reason = "help_doc" if structural.help_doc else "partners_page"
         dc.fired = list(structural.fired)

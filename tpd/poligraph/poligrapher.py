@@ -139,11 +139,18 @@ class PoliGrapher:
         return out
 
 
+# dont lemmatize data
+_LEMMA_FIXUPS = {"datum": "data"}
+
+
 def _make_lemmatizer(nlp: NLP):
     def _lem(text: str) -> str:
         try:
             doc = nlp.nlp(text)
-            return " ".join(t.lemma_.lower() for t in doc if not t.is_punct and not t.is_space)
+            return " ".join(
+                _LEMMA_FIXUPS.get(lemma, lemma)
+                for lemma in (t.lemma_.lower() for t in doc if not t.is_punct and not t.is_space)
+            )
         except Exception:
             return text
     return _lem

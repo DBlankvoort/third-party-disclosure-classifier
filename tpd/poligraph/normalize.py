@@ -16,13 +16,20 @@ _STOPWORDS = {
     "that", "these", "those", "such", "any", "all", "some", "other", "others",
     "certain", "various", "including", "include", "of", "and", "or", "for",
     "from", "to", "with", "you", "user", "users", "about", "related", "relating",
-    "additional", "more", "etc",
+    "additional", "more", "etc", "one",
 }
 
 _FIRST_PARTY_WORDS = {"we", "us", "our", "ourselves", "company", "i", "me"}
+
+_SELF_REFERENCE_SURFACES = {
+    "site", "sites", "web site", "web sites", "website", "websites",
+    "app", "apps", "application", "applications",
+    "platform", "platforms", "service", "services",
+}
 _THIRD_PARTY_CUES = {"third party", "third parties", "third-party", "partner",
                      "partners", "vendor", "vendors", "provider", "providers",
-                     "affiliate", "affiliates", "service provider"}
+                     "affiliate", "affiliates", "service provider",
+                     "recipient", "recipients"}
 _GENERIC_DATA_HEADS = {"information", "data", "datum", "detail", "details"}
 
 
@@ -79,6 +86,8 @@ class PhraseNormalizer:
             if rx.search(text):
                 return member
         cleaned = self._strip_stops(text)
+        if cleaned in _SELF_REFERENCE_SURFACES:
+            return FIRST_PARTY
         lemmas = self._lemmatize(cleaned)
         # blanket third party
         if not lemmas or any(cue in text for cue in _THIRD_PARTY_CUES) and \
@@ -105,7 +114,10 @@ class PhraseNormalizer:
         words = set(cleaned.split())
         generic = {"third", "party", "parties", "partner", "partners", "vendor",
                    "vendors", "provider", "providers", "service", "affiliate",
-                   "affiliates", "company", "companies", "business"}
+                   "affiliates", "company", "companies", "business",
+                   "recipient", "recipients",
+                   "site", "sites", "website", "websites", "app", "apps",
+                   "application", "applications", "platform", "platforms"}
         return bool(words) and words <= generic
 
     @staticmethod

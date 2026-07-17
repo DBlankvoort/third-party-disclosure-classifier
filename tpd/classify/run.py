@@ -21,6 +21,10 @@ _MR_ROLES = {"ads_txt", "app_ads_txt", "sellers_json", "vendors_json", "tcf_gvl"
 # Detect machine-readable from head.
 _MR_MAX_BYTES = 200_000
 
+# Special truncation for app store.
+_LISTING_ROLES = {"store_listing"}
+_LISTING_MAX_BYTES = 3_000_000
+
 
 @dataclass
 class CorpusResult:
@@ -32,6 +36,8 @@ class CorpusResult:
 def _max_bytes_for_role(role: str) -> int:
     if role in _MR_ROLES:
         return _MR_MAX_BYTES
+    if role in _LISTING_ROLES:
+        return _LISTING_MAX_BYTES
     return MAX_HTML_BYTES
 
 
