@@ -27,6 +27,15 @@ PROPAGATION_FIELDS = [
 ]
 
 
+def interleave_fresh(known: list, fresh: list, order_seed: int) -> list:
+    """Insert items at random positions."""
+    rng = random.Random(order_seed)
+    out = list(known)
+    for item in fresh:
+        out.insert(rng.randint(0, len(out)), item)
+    return out
+
+
 def _shuffled_targets(result: CorpusResult, order_seed: int,
                       prior_order: dict[str, int] | None = None):
     """A shuffled list of (label_order, target) pairs."""
@@ -37,10 +46,7 @@ def _shuffled_targets(result: CorpusResult, order_seed: int,
     known = [t for t in targets if t.target_id in prior_order]
     fresh = [t for t in targets if t.target_id not in prior_order]
     known.sort(key=lambda t: prior_order[t.target_id])
-    start = max(prior_order.values(), default=0) + 1
-    out = [(prior_order[t.target_id], t) for t in known]
-    out += list(enumerate(fresh, start=start))
-    return out
+    return list(enumerate(interleave_fresh(known, fresh, order_seed), start=1))
 
 def _load_prior_gold(prior_path, gold_field: str):
     """Read gold from an existing sheet."""

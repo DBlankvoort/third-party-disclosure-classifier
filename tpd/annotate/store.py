@@ -145,10 +145,13 @@ class AnnotationStore:
 
     def _ensure_presence_rows(self) -> None:
         """One presence row per target in the relevance sheet."""
-        existing = {r.get("target_id") for r in self.presence}
+        existing = {r.get("target_id"): r for r in self.presence}
         added = False
         for tid, rows in self._targets_in_order():
             if tid in existing:
+                if existing[tid].get("label_order") != rows[0].get("label_order", ""):
+                    existing[tid]["label_order"] = rows[0].get("label_order", "")
+                    added = True
                 continue
             self.presence.append({
                 "label_order": rows[0].get("label_order", ""),
