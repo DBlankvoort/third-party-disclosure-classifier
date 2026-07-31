@@ -14,6 +14,8 @@ DEFAULT_ROLES = {
 
 CACHE_NAME = "poligraph.json"
 
+PIPELINE_VERSION = 4
+
 _GRAPHER = None
 _IMPORT_ERROR: str | None = None
 
@@ -73,12 +75,15 @@ def graphs_for_target(
             continue
         h = _doc_hash(html)
         entry = cache.get(d.doc_id)
-        if entry and entry.get("hash") == h:
+        if (entry and entry.get("hash") == h
+                and entry.get("version") == PIPELINE_VERSION):
             graphs[d.doc_id] = PoliGraph.from_dict(entry["graph"])
             continue
         graph = _grapher().from_html(html, f"{target_id}/{d.doc_id}").validate()
         graphs[d.doc_id] = graph
-        cache[d.doc_id] = {"hash": h, "graph": graph.to_dict()}
+        cache[d.doc_id] = {
+            "hash": h, "version": PIPELINE_VERSION, "graph": graph.to_dict()
+        }
         dirty = True
 
     if dirty:

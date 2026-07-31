@@ -28,6 +28,8 @@ _STRUCTURED_LIST_ROLES = {
     "app_ads_txt", "ads_txt", "tcf_gvl",
 }
 
+NON_NAMING_ROLES = {"store_listing", "play_data_safety", "app_privacy"}
+
 
 def _pct(x: float) -> str:
     return f"{100 * x:.1f}%"
@@ -105,8 +107,10 @@ class AgreementReport:
     n_classified: int = 0
     coverage: float = 0.0
     n_gold: int = 0
-    exact_agreement: float = 0.0 
+    exact_agreement: float = 0.0
     mean_jaccard: float = 0.0
+    n_gold_docs: int = 0
+    doc_agreement: float = 0.0
     coverage_passed: bool = False
     agreement_passed: bool = False
 
@@ -124,11 +128,17 @@ class AgreementReport:
         )
         if not self.n_gold:
             return head + "agreement=n/a"
+        tail = ""
+        if self.n_gold_docs:
+            tail = (
+                f"; per-document agreement={_pct(self.doc_agreement)} "
+                f"on {self.n_gold_docs} gold docs"
+            )
         return head + (
             f"agreement={_pct(self.exact_agreement)} on {self.n_gold} gold "
             f"(mean Jaccard={_pct(self.mean_jaccard)}) "
             f"[{'PASS' if self.agreement_passed else 'FAIL'}]"
-        )
+        ) + tail
 
 
 def _jaccard(a: set, b: set) -> float:
@@ -147,6 +157,7 @@ def agreement(
     result: CorpusResult,
     gold: dict[str, set],
     labeled_docs: dict[str, set] | None = None,
+    doc_gold: dict[tuple[str, str], set] | None = None,
 ) -> AgreementReport:
     """Coverage + agreement calculation."""
     c, n, cov = coverage(result)
@@ -177,6 +188,19 @@ def agreement(
 
     exact_agree = exact / n_gold if n_gold else 0.0
     mean_jacc = statistics.mean(jaccards) if jaccards else 0.0
+
+    n_gold_docs = doc_exact = 0
+    if doc_gold:
+        by_doc = {
+            (tc.target_id, d.doc_id): set(d.facets)
+            for tc in result.targets for d in tc.docs
+        }
+        for key, gf in doc_gold.items():
+            if key not in by_doc:
+                continue
+            n_gold_docs += 1
+            doc_exact += by_doc[key] == set(gf)
+
     return AgreementReport(
         n_targets=n,
         n_classified=c,
@@ -184,6 +208,8 @@ def agreement(
         n_gold=n_gold,
         exact_agreement=exact_agree,
         mean_jaccard=mean_jacc,
+        n_gold_docs=n_gold_docs,
+        doc_agreement=(doc_exact / n_gold_docs) if n_gold_docs else 0.0,
         coverage_passed=cov >= TARGET_COVERAGE,
         agreement_passed=(exact_agree >= TARGET_AGREEMENT) if n_gold else False,
     )
@@ -283,7 +309,10 @@ def naming_rate(result: CorpusResult) -> dict[str, NamingReport]:
     }
     out: dict[str, NamingReport] = {}
     for name, (in_group, target) in groups.items():
-        docs = [d for tc in result.targets if in_group(tc.target_type) for d in tc.docs]
+        docs = [
+            d for tc in result.targets if in_group(tc.target_type)
+            for d in tc.docs if d.role not in NON_NAMING_ROLES
+        ]
         n = len(docs)
         named = sum(1 for d in docs if d.named_orgs)
         rate = named / n if n else 0.0
@@ -317,7 +346,9 @@ class IdentificationReport:
 def _identification_counts(
     corpus: Corpus, gold: dict[str, bool], roles: set[str],
     target_ids: list[str] | None = None,
+    gold_doc_ids: dict[str, set[str]] | None = None,
 ) -> tuple[int, int]:
+    """Targets whose known-present document the crawl actually recovered."""
     ids = target_ids if target_ids is not None else corpus.list_targets()
     present = identified = 0
     for tid in ids:
@@ -325,18 +356,23 @@ def _identification_counts(
             continue
         present += 1
         _, docs = corpus.read_manifest(tid)
-        if any(d.role in roles and d.ok for d in docs):
-            identified += 1
+        wanted = (gold_doc_ids or {}).get(tid)
+        if wanted:
+            found = any(d.doc_id in wanted and d.ok for d in docs)
+        else:
+            found = any(d.role in roles and d.ok for d in docs)
+        identified += found
     return identified, present
 
 
 def policy_identification(
     corpus: Corpus, gold: dict[str, bool], group: str,
     target_ids: list[str] | None = None,
+    gold_doc_ids: dict[str, set[str]] | None = None,
 ) -> IdentificationReport:
     """Whether a fetched privacy policy was found for targets known to have one."""
     identified, present = _identification_counts(
-        corpus, gold, {"privacy_policy"}, target_ids
+        corpus, gold, {"privacy_policy"}, target_ids, gold_doc_ids
     )
     target = TARGET_PP_ID_WEBSITE if group == "website" else TARGET_PP_ID_APP
     rate = identified / present if present else 0.0
@@ -349,10 +385,11 @@ def policy_identification(
 def structured_list_identification(
     corpus: Corpus, gold: dict[str, bool], group: str,
     target_ids: list[str] | None = None,
+    gold_doc_ids: dict[str, set[str]] | None = None,
 ) -> IdentificationReport:
     """Whether a fetched structured third-party list was found for targets known to have one."""
     identified, present = _identification_counts(
-        corpus, gold, _STRUCTURED_LIST_ROLES, target_ids
+        corpus, gold, _STRUCTURED_LIST_ROLES, target_ids, gold_doc_ids
     )
     target = TARGET_LIST_ID_WEBSITE if group == "website" else TARGET_LIST_ID_APP
     rate = identified / present if present else 0.0
@@ -414,29 +451,42 @@ class PropagationReport:
     n_reviewed: int = 0
     n_false: int = 0
     false_rate: float = 0.0
+    n_stale: int = 0
     passed: bool = False
 
     @property
     def summary(self) -> str:
+        stale = (
+            f" ({self.n_stale} reviewed clause(s) no longer extracted)"
+            if self.n_stale else ""
+        )
         if self.n_reviewed < TARGET_PROPAGATION_MIN_N:
             return (
                 f"Data-type propagation review: only {self.n_reviewed}/"
                 f"{TARGET_PROPAGATION_MIN_N} distinct clauses reviewed so far -> FAIL"
+                f"{stale}"
             )
         return (
             f"Data-type propagation review (>= {TARGET_PROPAGATION_MIN_N} distinct clauses, "
             f"0 false propagations expected): {self.n_false} false / {self.n_reviewed} "
-            f"reviewed -> {'PASS' if self.passed else 'FAIL'}"
+            f"reviewed -> {'PASS' if self.passed else 'FAIL'}{stale}"
         )
 
 
-def propagation(gold: dict[str, bool]) -> PropagationReport:
+def propagation(
+    gold: dict[str, bool], clause_ids: set[str] | None = None
+) -> PropagationReport:
     """Propagation tests."""
-    n = len(gold)
-    n_false = sum(1 for correct in gold.values() if not correct)
+    reviewed = (
+        {cid: v for cid, v in gold.items() if cid in clause_ids}
+        if clause_ids is not None else dict(gold)
+    )
+    n = len(reviewed)
+    n_false = sum(1 for correct in reviewed.values() if not correct)
     return PropagationReport(
         n_reviewed=n,
         n_false=n_false,
         false_rate=(n_false / n) if n else 0.0,
+        n_stale=len(gold) - n,
         passed=(n >= TARGET_PROPAGATION_MIN_N and n_false == 0),
     )

@@ -100,9 +100,12 @@ def collect_website(
     home = target.url.rstrip("/")
     base_host = urlparse(home).netloc or home
     seen_hashes: set[str] = set()
+    saved_urls: set[str] = set()
 
     def _save(url: str, role: str, dedup: bool = False) -> CollectedDoc | None:
         res = fetch(url, cache_dir=cache, force=force, delay=delay)
+        if (res.final_url or url).rstrip("/") in saved_urls:
+            return None
         # Content de-dup
         if dedup and res.ok and res.text:
             key = _content_key(res.text)
@@ -120,8 +123,10 @@ def collect_website(
         if res.ok and res.text:
             corpus.save_doc(target.id, doc, res.text)
             seen_hashes.add(_content_key(res.text))
+            saved_urls.add(doc.url.rstrip("/"))
             docs.append(doc)
-        return doc if res.ok else None
+            return doc
+        return None
 
     # 1. homepage ----------------------------------------------------------- #
     home_res = fetch(home, cache_dir=cache, force=force, delay=delay) if home else None
@@ -156,15 +161,19 @@ def collect_website(
 
     # 4. fetch discovered companion docs ------------------------------------ #
     seen_urls = {d.url for d in docs}
+    per_role: dict[str, int] = {}
     for role, urls in discovered.items():
+        if role == "privacy_policy" or role not in _COMPANION_ROLES:
+            continue
         for url in urls:
-            if role == "privacy_policy" or role not in _COMPANION_ROLES:
-                continue
+            if per_role.get(role, 0) >= lexicons.MAX_DOCS_PER_ROLE:
+                break
             if url in seen_urls:
                 continue
             if not _same_site(url, base_host, policy_host):
                 continue
-            _save(url, role, dedup=True)
+            if _save(url, role, dedup=True) is not None:
+                per_role[role] = per_role.get(role, 0) + 1
             seen_urls.add(url)
 
     # 5. try conventional companion paths for high-value surfaces not yet found.

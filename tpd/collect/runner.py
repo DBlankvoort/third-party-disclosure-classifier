@@ -246,15 +246,24 @@ def augment_disclosure_target(
 
     # 3. Fetch candidates
     seen_hashes = {_content_key(corpus.read_doc_html(d)) for d in docs if d.ok}
+    seen_urls = {(d.url or "").rstrip("/") for d in docs if d.ok}
+    per_role: dict[str, int] = {}
     new_docs: list[CollectedDoc] = []
     base_idx = len(docs)
     for url, role in candidates.items():
+        if per_role.get(role, 0) >= lexicons.MAX_DOCS_PER_ROLE:
+            continue
         res = fetch(url, cache_dir=corpus.cache_dir, force=force, delay=delay)
         if not (res.ok and res.text):
+            continue
+        final = (res.final_url or url).rstrip("/")
+        if final in seen_urls:
             continue
         key = _content_key(res.text)
         if key in seen_hashes:
             continue
+        seen_urls.add(final)
+        per_role[role] = per_role.get(role, 0) + 1
         doc = CollectedDoc(
             doc_id=f"{role}-{base_idx + len(new_docs):02d}",
             url=res.final_url or url,

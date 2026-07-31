@@ -290,8 +290,13 @@ LINK_DISCOVERY = [
         r"(?:who|companies|parties) we share", re.I)),
     ("do_not_sell", re.compile(r"do[-_ ]?not[-_ ]?sell|your privacy choices|opt[-_ ]?out", re.I)),
     ("partners_page", re.compile(r"\b(our partners|partner directory|integrations?|app directory)\b", re.I)),
-    ("help_doc", re.compile(r"\b(help|support|faq|knowledge ?base)\b", re.I)),
+    ("help_doc", re.compile(
+        r"(?:^|//|\.)(?:help|support|faq)[./]|"
+        r"/(?:help|support|faqs?|kb|knowledge[-_]?base)(?:[/?#]|$)|"
+        r"\b(?:help ?cent(?:er|re)|knowledge base|frequently asked questions)\b", re.I)),
 ]
+
+MAX_DOCS_PER_ROLE = 3
 
 # --------------------------------------------------------------------------- #
 # Clause detection

@@ -16,7 +16,7 @@ _STOPWORDS = {
     "that", "these", "those", "such", "any", "all", "some", "other", "others",
     "certain", "various", "including", "include", "of", "and", "or", "for",
     "from", "to", "with", "you", "user", "users", "about", "related", "relating",
-    "additional", "more", "etc", "one",
+    "additional", "more", "etc", "one", "and/or",
 }
 
 _FIRST_PARTY_WORDS = {"we", "us", "our", "ourselves", "company", "i", "me"}
@@ -31,6 +31,13 @@ _THIRD_PARTY_CUES = {"third party", "third parties", "third-party", "partner",
                      "affiliate", "affiliates", "service provider",
                      "recipient", "recipients"}
 _GENERIC_DATA_HEADS = {"information", "data", "datum", "detail", "details"}
+
+_NON_NOMINAL_QUALIFIERS = {
+    "access", "collect", "disclose", "gather", "obtain", "process", "provide",
+    "receive", "record", "require", "retain", "send", "share", "store",
+    "transfer", "use", "follow", "give", "get", "make",
+    "what", "which", "whatever", "whichever",
+}
 
 
 @lru_cache(maxsize=1)
@@ -67,12 +74,12 @@ class PhraseNormalizer:
             if rx.search(text) or rx.search(cleaned):
                 return term
         # Unspecified data: a blanket head word with no qualifier left.
-        lemmas = self._lemmatize(cleaned).split()
+        lemmas = self._drop_non_nominal(self._lemmatize(cleaned).split())
         if not lemmas or (len(lemmas) == 1 and lemmas[0] in _GENERIC_DATA_HEADS):
             return UNSPECIFIED_DATA
         if all(w in _GENERIC_DATA_HEADS for w in lemmas):
             return UNSPECIFIED_DATA
-        return self._lemmatize(cleaned) or UNSPECIFIED_DATA
+        return " ".join(lemmas)
 
     # ---------------------------------------------------------------- entities
     def normalize_entity(self, phrase: str) -> str:
@@ -103,6 +110,20 @@ class PhraseNormalizer:
         return "third"
 
     # ------------------------------------------------------------- helpers
+    @staticmethod
+    def _drop_non_nominal(lemmas: list[str]) -> list[str]:
+        """Drop the leading verbs and interrogatives of a data phrase."""
+        i = 0
+        while i < len(lemmas) - 1:
+            word = lemmas[i]
+            if word in _NON_NOMINAL_QUALIFIERS:
+                i += 1
+            elif word.endswith("ly") and lemmas[i + 1] in _NON_NOMINAL_QUALIFIERS:
+                i += 1
+            else:
+                break
+        return lemmas[i:]
+
     @staticmethod
     def _strip_stops(text: str) -> str:
         words = re.findall(r"[a-z0-9'/]+", text.lower())

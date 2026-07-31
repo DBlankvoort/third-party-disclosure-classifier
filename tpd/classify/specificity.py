@@ -59,6 +59,8 @@ def _nav_junk(seg: str) -> bool:
 # A short informational heading / link label.
 _INFO_HEADING_RE = re.compile(r"^(?:how|what|why|where|when|who|learn)\b[^.!?:]{0,80}$", re.I)
 
+_QUESTION_RE = re.compile(r"\?\s*$")
+
 # A disclosure lead-in.
 _LEADIN_CARRY = 8
 
@@ -193,14 +195,16 @@ def _party_orgs(seg: str, orgs: list[str]) -> list[str]:
 _MAX_SEG_LEN = 600
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
+_UNSEGMENTED_MAX = 1200
+
 
 def _sentence_segments(segments) -> list[str]:
     out: list[str] = []
     for seg in segments:
-        if len(seg) <= _MAX_SEG_LEN:
-            out.append(seg)
-        else:
-            out.extend(p for p in _SENT_SPLIT_RE.split(seg) if p.strip())
+        parts = [seg] if len(seg) <= _MAX_SEG_LEN else [
+            p for p in _SENT_SPLIT_RE.split(seg) if p.strip()
+        ]
+        out.extend(p for p in parts if len(p) <= _UNSEGMENTED_MAX)
     return out
 
 
@@ -222,6 +226,8 @@ def _scan_prose(
             continue
         # Do not consider informational headings pointing elsewhere.
         if _INFO_HEADING_RE.match(seg.strip()):
+            continue
+        if _QUESTION_RE.search(seg):
             continue
         q = positive_sharing(seg) or third_party_collects(seg) or implicit_sale(seg)
         if not q and policy_ctx:

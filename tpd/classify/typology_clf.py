@@ -130,7 +130,7 @@ def classify_document(
         doc, doc_class.medium, structural, role=role,
         target_type=target_type, ner_fn=ner_fn, first_party=first_party,
     )
-    facets = {facet_code(doc_class.medium, s) for s in scan.specificities}
+    facets = sorted(facet_code(doc_class.medium, s) for s in scan.specificities)
 
     out.facets = facets
     out.named_orgs = scan.named_orgs
@@ -167,7 +167,7 @@ def assemble_target(
             tc.relevant_docs += 1
         union |= set(dc.facets)
 
-    tc.facets = union
+    tc.facets = sorted(union)
     decisive = any(dc.decisive for dc in tc.docs)
     pending = any(dc.needs_review for dc in tc.docs)
     tc.classified = decisive and not pending

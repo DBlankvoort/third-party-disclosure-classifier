@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import csv
 import random
+import sys
 from pathlib import Path
 
 from ..classify.run import CorpusResult
+
+csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 # Default seed for the random ordering of targets in sheets.
 DEFAULT_ORDER_SEED = 1234
@@ -160,6 +163,27 @@ def load_typology_gold(path: str | Path) -> dict[str, set]:
     return {tid: agg.get(tid, set()) for tid in touched}
 
 
+def load_typology_gold_by_doc(
+    path: str | Path, reviewed_path: str | Path | None = None
+) -> dict[tuple[str, str], set]:
+    """Per-document typology gold."""
+    settled = load_typology_gold_docs(path, reviewed_path=reviewed_path)
+    gold: dict[tuple[str, str], set] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tid = row.get("target_id") or ""
+            did = row.get("doc_id") or ""
+            if did not in settled.get(tid, set()):
+                continue
+            facets = {
+                code.strip()
+                for code in (row.get("gold_facets") or "").split(";")
+                if code.strip() and code.strip().lower() != "none"
+            }
+            gold[(tid, did)] = facets
+    return gold
+
+
 def load_presence_gold(path: str | Path, column: str) -> dict[str, bool]:
     """Load a target-level presence gold column (e.g. "does a PP exist at all").
 
@@ -174,6 +198,18 @@ def load_presence_gold(path: str | Path, column: str) -> dict[str, bool]:
             if tid and v:
                 gold[tid] = v in ("1", "true", "yes")
     return gold
+
+
+def load_presence_doc_ids(path: str | Path, column: str) -> dict[str, set[str]]:
+    """The documents an annotator identified as the privacy policy / list."""
+    out: dict[str, set[str]] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            tid = row.get("target_id") or ""
+            ids = {v.strip() for v in (row.get(column) or "").split(";") if v.strip()}
+            if tid and ids:
+                out[tid] = ids
+    return out
 
 
 def distinct_data_type_clauses(relations_by_target: dict[str, list[dict]]) -> list[dict]:
@@ -246,13 +282,27 @@ def load_propagation_gold(path: str | Path) -> dict[str, bool]:
     return gold
 
 
-def load_typology_gold_docs(path: str | Path) -> dict[str, set]:
-    """Load docs for which typology gold exists."""
+def load_typology_gold_docs(
+    path: str | Path, reviewed_path: str | Path | None = None
+) -> dict[str, set]:
+    """Documents whose typology gold is settled."""
+    reviewed: dict[str, set] = {}
+    if reviewed_path is not None:
+        with open(reviewed_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if (row.get("gold_relevant") or "").strip() in ("0", "1"):
+                    reviewed.setdefault(row.get("target_id") or "", set()).add(
+                        row.get("doc_id") or ""
+                    )
+
     docs: dict[str, set] = {}
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             tid = row.get("target_id") or ""
             did = row.get("doc_id") or ""
-            if tid and did:
-                docs.setdefault(tid, set()).add(did)
+            if not (tid and did):
+                continue
+            if reviewed_path is not None and did not in reviewed.get(tid, set()):
+                continue
+            docs.setdefault(tid, set()).add(did)
     return docs

@@ -1,10 +1,10 @@
 {
   "patterns": [
-    ["non-personal information", "\\bnon-?personal\\b|\\bnon-?pii\\b|\\bnot personal\\b|\\bnon-?identif"],
+    ["non-personal information", "\\bnon[- ]?personal\\w*\\b|\\bnon[- ]?pii\\b|\\bnot personal\\w*\\b|\\bnon[- ]?identif"],
     ["aggregate / deidentified / pseudonymized information", "\\b(aggregat|de-?identif|pseudonymi[sz]|anonymi[sz]|anonymous)\\w*"],
     ["precise geolocation", "(precise|exact|fine|gps)\\b.*\\b(geo)?locat"],
     ["coarse geolocation", "(coarse|approximate|general|city|region|postal|zip)\\b.*\\b(geo)?locat"],
-    ["geolocation", "\\b(geo-?location|geolocation|location data|location information|gps location|physical location)\\b"],
+    ["geolocation", "\\b(geo-?location|geolocation|location)\\b"],
     ["ip address", "\\bip\\b.*\\baddress\\b|\\binternet protocol\\b"],
     ["mac address", "\\bmac\\b.*\\baddress\\b"],
     ["android id", "\\bandroid\\b.*\\bid"],
@@ -42,6 +42,6 @@
     ["browsing / search history", "\\b(browsing|browser|search|web)\\b.*\\bhistory|\\burl\\b.*\\bvisit"],
     ["internet activity", "\\binternet\\b.*\\bactivity|\\bclickstream|\\busage data"],
     ["identifier", "\\bidentifier\\b|\\bunique id\\b"],
-    ["personal information", "\\bpersonal\\b.*\\b(information|info|data|detail)|\\bpersonal\\b"]
+    ["personal information", "\\bpersonal\\b.*\\b(information|info|data|detail)|\\bpersonally identifiab\\w*|\\bpersonal\\b"]
   ]
 }

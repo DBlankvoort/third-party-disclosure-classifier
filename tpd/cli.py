@@ -28,11 +28,14 @@ from .evaluate import (
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
+    load_typology_gold_by_doc,
     load_presence_gold,
+    load_presence_doc_ids,
     load_propagation_gold,
     write_relevance_sheet,
     write_typology_sheet,
     write_propagation_sheet,
+    distinct_data_type_clauses,
     APP_TARGET_TYPES,
 )
 
@@ -272,7 +275,14 @@ def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
     typology_agreement = agreement(
         result,
         load_typology_gold(typology_gold) if typology_gold else {},
-        labeled_docs=load_typology_gold_docs(typology_gold) if typology_gold else None,
+        labeled_docs=(
+            load_typology_gold_docs(typology_gold, reviewed_path=relevance_gold)
+            if typology_gold else None
+        ),
+        doc_gold=(
+            load_typology_gold_by_doc(typology_gold, reviewed_path=relevance_gold)
+            if typology_gold else None
+        ),
     )
     click.echo(typology_agreement.summary)
 
@@ -283,12 +293,16 @@ def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
 
     pp_gold = load_presence_gold(pp_presence_gold, "gold_pp_present") if pp_presence_gold else {}
     list_gold = load_presence_gold(list_presence_gold, "gold_list_present") if list_presence_gold else {}
+    pp_docs = load_presence_doc_ids(pp_presence_gold, "gold_pp_doc_ids") if pp_presence_gold else {}
+    list_docs = load_presence_doc_ids(list_presence_gold, "gold_list_doc_ids") if list_presence_gold else {}
     ids_by_group = {"website": [], "app": []}
     for tc in result.targets:
         ids_by_group["app" if tc.target_type in APP_TARGET_TYPES else "website"].append(tc.target_id)
     for group, group_ids in ids_by_group.items():
-        click.echo(policy_identification(corpus, pp_gold, group, target_ids=group_ids).summary)
-        click.echo(structured_list_identification(corpus, list_gold, group, target_ids=group_ids).summary)
+        click.echo(policy_identification(corpus, pp_gold, group, target_ids=group_ids,
+                                         gold_doc_ids=pp_docs).summary)
+        click.echo(structured_list_identification(corpus, list_gold, group, target_ids=group_ids,
+                                                  gold_doc_ids=list_docs).summary)
 
     # Data-sharing ontology KPIs
     from .classify.poligraph_connector import corpus_relations, poligraph_available
@@ -300,7 +314,11 @@ def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
         if propagation_gold:
             gold = load_propagation_gold(propagation_gold)
             if gold:
-                click.echo(propagation(gold).summary)
+                current = {
+                    f"{c['target_id']}::{c['entity']}::{c['data_type']}"
+                    for c in distinct_data_type_clauses(relations_by_target)
+                }
+                click.echo(propagation(gold, clause_ids=current).summary)
             else:
                 click.echo("No filled gold_correct rows found.")
 
