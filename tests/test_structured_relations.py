@@ -152,7 +152,18 @@ class TestSellersJson:
         ]})
         rels = registry_relations(raw)
         assert [r["entity"] for r in rels] == ["open ads"]
-        assert rels[0]["action"] == "be_shared"
+        assert rels[0]["action"] == "collect"
+
+    def test_sellers_are_upstream_suppliers(self):
+        raw = json.dumps({"sellers": [{"seller_id": "1", "name": "Open Ads"}]})
+        (rel,) = registry_relations(raw)
+        assert rel["direction"] == "upstream"
+
+    def test_ads_txt_entries_stay_downstream(self):
+        rels = registry_relations(self.ADS_TXT)
+        assert {r["direction"] for r in rels} == {"downstream"}
+
+    ADS_TXT = "google.com, pub-0000000000000000, DIRECT, f08c47fec0942fa0\n"
 
     def test_invalid_json(self):
         assert registry_relations('{"sellers": not json') == []

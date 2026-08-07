@@ -13,6 +13,13 @@ from ..poligraph.purpose import match_purpose_tags
 from .named_entities import _is_first_party
 
 # --------------------------------------------------------------------------- #
+# Relation direction
+# --------------------------------------------------------------------------- #
+DOWNSTREAM = "downstream"
+UPSTREAM = "upstream"
+
+
+# --------------------------------------------------------------------------- #
 # Purpose mapping
 # --------------------------------------------------------------------------- #
 # IAB-TCF purpose mappings
@@ -30,6 +37,11 @@ def purposes_from_text(text: str) -> list[str]:
     return sorted(match_purpose_tags(text))
 
 
+def purposes_from_tcf(ids) -> list[str]:
+    """Map IAB-TCF purpose ids to purpose tags."""
+    return sorted({_TCF_PURPOSES.get(i, "other") for i in (ids or ()) if isinstance(i, int)})
+
+
 def _relation(
     entity: str,
     data_type: str,
@@ -39,6 +51,7 @@ def _relation(
     qualifier: str = "",
     text: str = "",
     doc_id: str = "",
+    direction: str = DOWNSTREAM,
 ) -> dict:
     return {
         "entity": entity.strip().lower(),
@@ -47,6 +60,7 @@ def _relation(
         "data_type": data_type,
         "action": action,
         "negative": False,
+        "direction": direction,
         "purposes": purposes or [],
         "examples": [],
         "qualifier": qualifier,
@@ -92,11 +106,11 @@ def _sellers_json_relations(raw: str, doc_id: str) -> list[dict]:
             continue
         stype = str(s.get("seller_type") or "").lower()
         out.append(_relation(
-            name, "advertising bid data", "be_shared",
+            name, "advertising bid data", "collect",
             source="sellers_json", purposes=["advertising"],
             qualifier=stype,
             text=f"seller_id={s.get('seller_id', '')} seller_type={stype or '?'}",
-            doc_id=doc_id,
+            doc_id=doc_id, direction=UPSTREAM,
         ))
     return out
 
@@ -115,7 +129,7 @@ def _gvl_relations(raw: str, doc_id: str, source: str) -> list[dict]:
         if not isinstance(v, dict) or not v.get("name"):
             continue
         ids = v.get("purposes") or []
-        purposes = sorted({_TCF_PURPOSES.get(i, "other") for i in ids if isinstance(i, int)})
+        purposes = purposes_from_tcf(ids)
         out.append(_relation(
             v["name"], "cookie / device identifiers", "be_shared",
             source=source, purposes=purposes,

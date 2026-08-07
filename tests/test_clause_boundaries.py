@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
-from tpd.classify.specificity import _sentence_segments
+from tpd.classify.specificity import _scan_prose, _sentence_segments
 from tpd.classify.typology_clf import classify_document
 from tpd.extract import parse_html
+
+# A recipients list longer than the fixed lead-in carry, naming its vendor last.
+_LIST_ITEMS = "".join(
+    f"<li>Service providers that support category {i}.</li>" for i in range(14)
+)
+LONG_RECIPIENT_LIST_HTML = f"""
+<html><body>
+<p>We may share your personal data with other organisations that provide
+services on our behalf, including:</p>
+<ul>{_LIST_ITEMS}
+<li>Data management companies, such as Formstack, that help us collect
+personal data via online forms.</li></ul>
+</body></html>
+"""
 
 NAV_LABELS = (
     "Membership Renew your membership Payments and support Contact us "
@@ -50,7 +64,7 @@ class TestUnsegmentedRuns:
         prose = "We share data with partners. " * 60
         out = _sentence_segments([prose])
         assert len(out) == 60
-        assert all(s.startswith("We share") for s in out)
+        assert all(s.startswith("We share") for s, _ in out)
 
     def test_nav_blob_yields_no_facets(self):
         doc = parse_html(NAV_ONLY_HTML)
@@ -58,6 +72,13 @@ class TestUnsegmentedRuns:
                                url="https://example.org/education/support-programme")
         assert dc.facets == []
         assert not dc.relevant
+
+
+class TestListLeadIn:
+    def test_lead_in_governs_the_whole_enumeration(self):
+        doc = parse_html(LONG_RECIPIENT_LIST_HTML)
+        scan = _scan_prose(doc, ner_fn=None, first_party=set(), policy_ctx=True)
+        assert "Formstack" in scan.named_orgs
 
 
 class TestInterrogativeHeadings:

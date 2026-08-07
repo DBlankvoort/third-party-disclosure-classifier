@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import traceback
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -23,7 +25,80 @@ CONFIG = {
     "use_poligraph": True,
     "delay": 0.2,
     "allowed_origin": "",
+    "entity_domains": "",
 }
+
+
+# --------------------------------------------------------------------------- #
+# Graph expansion jobs
+# --------------------------------------------------------------------------- #
+_JOBS: dict[str, dict] = {}
+_JOBS_LOCK = threading.Lock()
+MAX_JOBS = 8
+
+
+def _entity_overrides() -> dict:
+    path = CONFIG["entity_domains"]
+    if not path:
+        return {}
+    try:
+        from tpd.evaluate import load_entity_domains
+
+        return load_entity_domains(path)
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"  entity domains not loaded: {exc}\n")
+        return {}
+
+
+def start_expansion(url: str, hops: int, requests: list, force: bool,
+                    cmp: dict | None = None) -> str:
+    from tpd.expand import Expansion
+
+    expansion = Expansion(
+        CONFIG["corpus_root"], url, hops=hops, requests=requests, force=force,
+        delay=CONFIG["delay"], overrides=_entity_overrides(), cmp=cmp,
+    )
+    job_id = uuid.uuid4().hex[:12]
+
+    def run() -> None:
+        try:
+            expansion.run()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+    thread = threading.Thread(target=run, name=f"expand-{job_id}", daemon=True)
+    with _JOBS_LOCK:
+        # Walks left running by a closed tab would otherwise keep crawling.
+        for old_id, old in list(_JOBS.items()):
+            if not old["thread"].is_alive():
+                del _JOBS[old_id]
+        while len(_JOBS) >= MAX_JOBS:
+            oldest, job = next(iter(_JOBS.items()))
+            job["expansion"].stop()
+            del _JOBS[oldest]
+        _JOBS[job_id] = {"expansion": expansion, "thread": thread}
+    thread.start()
+    return job_id
+
+
+def job_snapshot(job_id: str) -> dict | None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if job is None:
+        return None
+    snapshot = job["expansion"].snapshot()
+    snapshot["job_id"] = job_id
+    snapshot["running"] = job["thread"].is_alive()
+    return snapshot
+
+
+def stop_job(job_id: str) -> bool:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if job is None:
+        return False
+    job["expansion"].stop()
+    return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -40,7 +115,7 @@ class Handler(BaseHTTPRequestHandler):
         if ok:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def _json(self, code: int, payload: dict) -> None:
@@ -57,23 +132,66 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
-    def do_GET(self) -> None:  # noqa: N802
+    # Observed requests arrive as a body because a page's request list runs to
+    # hundreds of URLs, well past what a query string will carry.
+    _MAX_BODY = 4 * 1024 * 1024
+
+    _PATHS = ["/health", "/analyze", "/graph", "/graph/stop"]
+
+    def _body(self) -> dict | None:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > self._MAX_BODY:
+            self._json(400, {"error": "missing or oversized body"})
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            self._json(400, {"error": f"bad JSON body: {exc}"})
+            return None
+
+    def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path == "/health":
-            self._json(200, {"ok": True, "ner": CONFIG["use_ner"],
-                             "poligraph": CONFIG["use_poligraph"],
-                             "corpus": CONFIG["corpus_root"]})
+        if parsed.path not in ("/analyze", "/graph", "/graph/stop"):
+            self._json(404, {"error": "not found", "paths": self._PATHS})
             return
-        if parsed.path != "/analyze":
-            self._json(404, {"error": "not found", "paths": ["/health", "/analyze"]})
+        payload = self._body()
+        if payload is None:
+            return
+        qs = parse_qs(parsed.query)
+
+        if parsed.path == "/graph/stop":
+            job_id = payload.get("job_id") or ""
+            self._json(200, {"stopped": stop_job(job_id), "job_id": job_id})
             return
 
-        qs = parse_qs(parsed.query)
-        url = (qs.get("url") or [""])[0]
-        force = (qs.get("force") or ["0"])[0] in ("1", "true", "yes")
+        url = payload.get("url") or (qs.get("url") or [""])[0]
         if not url:
-            self._json(400, {"error": "missing ?url="})
+            self._json(400, {"error": "missing url"})
             return
+        force = bool(payload.get("force")) or (
+            qs.get("force") or ["0"])[0] in ("1", "true", "yes")
+
+        if parsed.path == "/graph":
+            try:
+                hops = max(1, min(3, int(payload.get("hops") or 1)))
+            except (TypeError, ValueError):
+                hops = 1
+            try:
+                job_id = start_expansion(url, hops, payload.get("requests") or [],
+                                         force, payload.get("cmp"))
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            self._json(202, {"job_id": job_id, "hops": hops})
+            return
+
+        self._run(url, force, payload.get("requests") or [], payload.get("cmp"))
+
+    def _run(self, url: str, force: bool, requests: list | None = None,
+             cmp: dict | None = None) -> None:
         try:
             result = analyze_url(
                 url,
@@ -82,6 +200,8 @@ class Handler(BaseHTTPRequestHandler):
                 use_poligraph=CONFIG["use_poligraph"],
                 force=force,
                 delay=CONFIG["delay"],
+                requests=requests,
+                cmp=cmp,
             )
             self._json(200, result)
         except ValueError as exc:
@@ -89,6 +209,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
+            self._json(200, {"ok": True, "ner": CONFIG["use_ner"],
+                             "poligraph": CONFIG["use_poligraph"],
+                             "corpus": CONFIG["corpus_root"]})
+            return
+        if parsed.path == "/graph":
+            job_id = (parse_qs(parsed.query).get("job") or [""])[0]
+            snapshot = job_snapshot(job_id)
+            if snapshot is None:
+                self._json(404, {"error": "no such job", "job_id": job_id})
+                return
+            self._json(200, snapshot)
+            return
+        if parsed.path != "/analyze":
+            self._json(404, {"error": "not found", "paths": self._PATHS})
+            return
+
+        qs = parse_qs(parsed.query)
+        url = (qs.get("url") or [""])[0]
+        force = (qs.get("force") or ["0"])[0] in ("1", "true", "yes")
+        if not url:
+            self._json(400, {"error": "missing ?url="})
+            return
+        self._run(url, force)
 
     def log_message(self, fmt: str, *args) -> None:
         sys.stderr.write(f"  {self.address_string()} - {fmt % args}\n")
@@ -106,18 +253,23 @@ def main() -> None:
                     help="skip PoliGraph sharing-relationship extraction")
     ap.add_argument("--delay", type=float, default=CONFIG["delay"],
                     help="polite per-request delay (s)")
+    ap.add_argument("--entity-domains", default="",
+                    help="hand-filled entity_resolution.csv supplying "
+                         "organisation domains for graph expansion")
     args = ap.parse_args()
 
     CONFIG["corpus_root"] = args.corpus
     CONFIG["use_ner"] = not args.no_ner
     CONFIG["use_poligraph"] = not args.no_poligraph
     CONFIG["delay"] = args.delay
+    CONFIG["entity_domains"] = args.entity_domains
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"tpd extension bridge on http://{args.host}:{args.port}  "
           f"(ner={CONFIG['use_ner']}, poligraph={CONFIG['use_poligraph']}, "
           f"corpus={CONFIG['corpus_root']})")
-    print("  GET /analyze?url=https://example.com   ·   Ctrl-C to stop")
+    print("  GET  /analyze?url=https://example.com")
+    print("  POST /graph {url, hops}  ->  GET /graph?job=<id>   ·   Ctrl-C to stop")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

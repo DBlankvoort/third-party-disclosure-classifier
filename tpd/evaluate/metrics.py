@@ -21,6 +21,10 @@ TARGET_NAMING_WEBSITE = 0.50
 TARGET_NAMING_APP = 0.40
 TARGET_ONTOLOGY_COVERAGE = 0.95
 TARGET_PROPAGATION_MIN_N = 30
+TARGET_VERIFIED_CHAINS = 5
+CHAIN_PARTIES = 4
+TARGET_ARRANGEMENT_COVERAGE = 0.90
+TARGET_COVERAGE_SAMPLE = 4
 
 APP_TARGET_TYPES = {"play_store_app", "app_store_app"}
 _STRUCTURED_LIST_ROLES = {
@@ -489,4 +493,107 @@ def propagation(
         false_rate=(n_false / n) if n else 0.0,
         n_stale=len(gold) - n,
         passed=(n >= TARGET_PROPAGATION_MIN_N and n_false == 0),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Graph: onward-sharing chains
+# --------------------------------------------------------------------------- #
+@dataclass
+class ChainReport:
+    parties: int = CHAIN_PARTIES
+    n_found: int = 0
+    n_reviewed: int = 0
+    n_verified: int = 0
+    n_rejected: int = 0
+    n_verified_fully_disclosed: int = 0
+    n_stale: int = 0
+    passed: bool = False
+
+    @property
+    def summary(self) -> str:
+        stale = (
+            f" ({self.n_stale} reviewed chain(s) no longer extracted)"
+            if self.n_stale else ""
+        )
+        return (
+            f">= {TARGET_VERIFIED_CHAINS} verified {self.parties}-party sharing chains: "
+            f"{self.n_verified} verified of {self.n_reviewed} reviewed "
+            f"({self.n_found} extracted, {self.n_rejected} rejected, "
+            f"{self.n_verified_fully_disclosed} resting wholly on written "
+            f"disclosure) -> {'PASS' if self.passed else 'FAIL'}{stale}"
+        )
+
+
+def chain_verification(chains, gold: dict[str, bool]) -> ChainReport:
+    """Whether enough multi-party chains have been confirmed by hand."""
+    by_id = {c.id: c for c in chains}
+    reviewed = {cid: v for cid, v in gold.items() if cid in by_id}
+    verified = [cid for cid, ok in reviewed.items() if ok]
+    disclosed = sum(1 for cid in verified if by_id[cid].fully_disclosed)
+    lengths = {len(c.parties) for c in chains}
+    return ChainReport(
+        parties=lengths.pop() if len(lengths) == 1 else CHAIN_PARTIES,
+        n_found=len(by_id),
+        n_reviewed=len(reviewed),
+        n_verified=len(verified),
+        n_rejected=len(reviewed) - len(verified),
+        n_verified_fully_disclosed=disclosed,
+        n_stale=len(gold) - len(reviewed),
+        passed=len(verified) >= TARGET_VERIFIED_CHAINS,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Graph: arrangement coverage
+# --------------------------------------------------------------------------- #
+@dataclass
+class ArrangementCoverageReport:
+    n_targets: int = 0
+    n_gold: int = 0
+    n_recovered: int = 0
+    recall: float = 0.0
+    missed: list[str] = field(default_factory=list)
+    n_false: int = 0
+    sample_passed: bool = False
+    passed: bool = False
+
+    @property
+    def summary(self) -> str:
+        if not self.n_gold:
+            return "Arrangement coverage: n/a (no labelled arrangements)"
+        sample = (
+            "" if self.sample_passed else
+            f" [only {self.n_targets}/{TARGET_COVERAGE_SAMPLE} targets labelled]"
+        )
+        return (
+            f"Arrangement coverage >= {_pct(TARGET_ARRANGEMENT_COVERAGE)} on "
+            f"{TARGET_COVERAGE_SAMPLE} targets: recall={_pct(self.recall)} "
+            f"({self.n_recovered}/{self.n_gold} arrangements, "
+            f"{self.n_false} detected and rejected) "
+            f"-> {'PASS' if self.passed else 'FAIL'}{sample}"
+        )
+
+
+def arrangement_coverage(
+    gold: dict[str, dict], detected_ids: set[str]
+) -> ArrangementCoverageReport:
+    """Fraction of hand-labelled sharing arrangements."""
+    real = {aid: rec for aid, rec in gold.items() if rec.get("gold")}
+    recovered = [aid for aid in real if aid in detected_ids]
+    missed = sorted(set(real) - set(recovered))
+    targets = {rec["target_id"] for rec in real.values() if rec.get("target_id")}
+    n = len(real)
+    recall = (len(recovered) / n) if n else 0.0
+    enough = len(targets) >= TARGET_COVERAGE_SAMPLE
+    return ArrangementCoverageReport(
+        n_targets=len(targets),
+        n_gold=n,
+        n_recovered=len(recovered),
+        recall=recall,
+        missed=missed,
+        n_false=sum(1 for aid, rec in gold.items()
+                    if not rec.get("gold") and aid in detected_ids),
+        sample_passed=enough,
+        passed=bool(n) and enough and recall >= TARGET_ARRANGEMENT_COVERAGE,
     )

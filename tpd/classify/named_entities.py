@@ -10,6 +10,23 @@ from ..lexicons import CATEGORY_RE, GENERIC_RE
 
 # Regexes for common NER noise.
 NER_BLOCK_RE = re.compile(r"\b(information|data|personal|cardholder|cookies?)\b", re.I)
+# Data types and audience attributes.
+NER_DATA_TERM_RE = re.compile(
+    r"^(?:ip[- ]?addresse?s?|ids?|identifiers?|device\s+ids?|"
+    r"advertising\s+ids?|demographics?|geoloc(?:ation)?s?|locations?|"
+    r"interest\s+reporting|interests?|preferences?|"
+    r"e-?mail(?:\s+addresse?s?)?|phone\s+numbers?|browser\s+types?|"
+    r"user\s+agents?|screen\s+resolutions?|time\s+zones?|"
+    r"dsps?|isps?|ssps?|urls?)$",
+    re.I,
+)
+# Labels identifying a part of the document being read.
+NER_DOCUMENT_PART_RE = re.compile(
+    r"^(?:annex(?:es|ure)?|appendix|appendices|schedule|exhibit|attachment|"
+    r"addendum|addenda|section|article|clause|part|table|figure|paragraph)"
+    r"(?:\s+(?:[0-9]+|[ivxlcIVXLC]+|[A-Z]))?$",
+    re.I,
+)
 NER_BLOCK_ACRONYMS = {
     "PIN", "CIN", "IP", "SSN", "ID", "DOB", "FAQ", "URL", "PII", "TOS",
     # legal regimes / standards / industry bodies which are never named disclosed third parties.
@@ -55,6 +72,20 @@ NER_DEFINED_TERMS = {
     "disclosure", "disclosures", "request", "requests", "consent", "integration",
     "integrations", "order", "property", "intellectual", "group", "framework",
     "extension", "password", "recipient", "recipients", "purpose", "purposes",
+}
+
+# Jurisdictions named in international-transfer clauses.
+NER_PLACE_TERMS = {
+    "australia", "brazil", "canada", "china", "india", "japan", "singapore",
+    "switzerland", "new zealand", "south africa", "south korea", "israel",
+    "mexico", "argentina", "russia", "turkey", "philippines", "vietnam",
+    "indonesia", "malaysia", "thailand", "ireland", "germany", "france",
+    "spain", "italy", "netherlands", "belgium", "poland", "sweden", "norway",
+    "denmark", "finland", "portugal", "austria", "greece", "romania",
+    "united states", "united kingdom", "great britain", "england", "scotland",
+    "wales", "northern ireland", "hong kong", "taiwan", "united arab emirates",
+    "u.s", "u.s.", "us", "usa", "uk", "eu", "eea", "california", "texas",
+    "new york", "virginia", "colorado", "connecticut", "utah",
 }
 
 # Function words that may glue defined-term nouns into a glossary phrase.
@@ -132,9 +163,11 @@ def clean_ner_org(ent: str):
     s = _LEAD_DET_RE.sub("", s).strip(" .,:;-•")
     if not s or NER_BLOCK_RE.search(s) or s.upper() in NER_BLOCK_ACRONYMS:
         return None
-    if NER_STOP_RE.search(s):
+    if NER_STOP_RE.search(s) or NER_DOCUMENT_PART_RE.match(s):
         return None
-    if not any(t[:1].isupper() for t in s.split()):
+    # Vendor names capitalise internally as often as initially ("mParticle",
+    # "i-Movo", "eBay"), so an uppercase letter anywhere carries the signal.
+    if not any(c.isupper() for c in s):
         return None
     # Keep all-caps acronyms only if they are known by the gazetteer.
     if (
@@ -149,6 +182,11 @@ def clean_ner_org(ent: str):
     if len(s.split()) >= 4 and s.lower() not in _GAZ_TYPE:
         return None
     low = s.lower()
+    if low in NER_PLACE_TERMS or NER_DATA_TERM_RE.match(low):
+        return None
+    parts = low.split()
+    if len(parts) > 1 and parts[-1] in _LEGISLATION_TAILS:
+        return None
     # Check for entities only consisting of generic terms (test 1)
     core = _CORP_SUFFIX_RE.sub("", low).strip()
     if core in NER_DEFINED_TERMS:
@@ -163,6 +201,159 @@ def clean_ner_org(ent: str):
     if len(s.split()) <= 3 and (CATEGORY_RE.search(low) or GENERIC_RE.search(low)):
         return None
     return s
+
+
+# Cues that introduce a vendor by name.
+_NAMING_CUE_RE = re.compile(
+    r"\b(?:such as|includ(?:e|es|ing)(?: but not limited to)?|for example|"
+    r"e\.?g\.?|for instance|namely|(?:most )?notably|specifically|"
+    r"called|named|powered by|provided by|operated by|supplied by|hosted by|"
+    r"licen[cs]ed from|in partnership with|partners?|vendors?|"
+    r"providers?|processors?|suppliers?|recipients?)\b[\s:,-]*$",
+    re.I,
+)
+# Material that may sit between the cue and the name without breaking the
+# frame.
+_FRAME_FILLER_RE = re.compile(
+    r"^(?:(?:our|the|a|an|its|their|his|her)\s+|"
+    r"[A-Z][\w&.'’-]*(?:\s+[A-Za-z][\w&.'’-]*){0,3}\s*(?:,|\band\b|\bor\b)\s*|"
+    r"[a-z][\w-]*\s+)+$",
+)
+# "Skimlinks because they are an affiliate marketing service provider."
+_NAME_THEN_ROLE_RE = re.compile(r"^\s*because\b", re.I)
+# Capitalised sentence openers that a segment-initial name test would otherwise
+# mistake for a vendor.
+_SENTENCE_OPENERS = {
+    "it", "they", "we", "you", "he", "she", "this", "that", "these", "those",
+    "there", "here", "if", "when", "where", "while", "although", "however",
+    "below", "above", "share", "client", "please", "note", "our", "your",
+    "the", "a", "an", "all", "any", "some", "each", "every", "no", "not",
+    "for", "in", "on", "at", "to", "as", "by", "with", "from", "about",
+}
+# Opt-out enumerations of the form "LiveRamp: https://…".
+_NAME_THEN_LINK_RE = re.compile(r"^\s*[:–-]\s*(?:https?://|www\.)", re.I)
+
+_FRAME_WINDOW = 80
+
+
+def in_naming_frame(text: str, name: str) -> bool:
+    """Whether ``name`` is introduced by an explicit vendor-naming construction."""
+    for m in re.finditer(re.escape(name), text):
+        pre = text[max(0, m.start() - _FRAME_WINDOW):m.start()]
+        post = text[m.end():]
+        if _NAMING_CUE_RE.search(pre):
+            return True
+        # Walk back over coordinated names to find the cue introducing the list.
+        filler = _FRAME_FILLER_RE.search(pre)
+        if filler and _NAMING_CUE_RE.search(pre[:filler.start()]):
+            return True
+        if not pre.strip() and (
+            _NAME_THEN_ROLE_RE.match(post) or _NAME_THEN_LINK_RE.match(post)
+        ):
+            return True
+    return False
+
+
+_FRAME_CUE_RE = re.compile(
+    r"\b(?:such as|includ(?:e|es|ing)(?: but not limited to)?|for example|"
+    r"e\.?g\.?|for instance|namely|called|named|powered by|provided by|"
+    r"operated by|supplied by|hosted by|licen[cs]ed from)\b[\s:,-]*",
+    re.I,
+)
+_TOKEN_RE = re.compile(r"[A-Za-z][\w&'’-]*(?:\.[A-Za-z][\w&'’-]*)*")
+_POSSESSIVE_RE = re.compile(r"['’]s\b\s*$")
+_LEGISLATION_TAILS = {
+    "act", "acts", "law", "laws", "code", "codes", "regulation", "regulations",
+    "directive", "directives", "statute", "statutes", "rule", "rules",
+    "amendment", "amendments", "treaty", "convention", "clauses",
+}
+# Whitespace and coordinating punctuation between names in an enumeration.
+_FRAME_SEP_RE = re.compile(r"[ \t]*(?:,[ \t]*|&[ \t]*)?")
+# Determiners and descriptor nouns that may precede the name after a cue.
+_FRAME_SKIP_WORDS = {"our", "the", "a", "an", "its", "their"}
+_FRAME_CONNECTORS = {"and", "or"}
+# How many lowercase descriptor tokens may sit between cue and name.
+_FRAME_MAX_SKIP = 4
+_FRAME_MAX_NAMES = 6
+
+
+def _name_token(tok: str) -> bool:
+    """Whether a token carries the orthography of a proper name."""
+    return any(c.isupper() for c in tok)
+
+
+def frame_named_orgs(text: str) -> list[str]:
+    """Names read directly off explicit naming constructions in ``text``."""
+    out: list[str] = []
+
+    def emit(name: str) -> None:
+        name = _POSSESSIVE_RE.sub("", name).strip(" .,:;-•'’")
+        if not name:
+            return
+        # Navigation runs and comma-free enumerations abut distinct brands with
+        # nothing lowercase between them.
+        toks = name.split()
+        if len(toks) > 1:
+            known = [t for t in toks if t.lower() in _GAZ_TYPE]
+            if len(known) > 1:
+                for t in known:
+                    if t not in out:
+                        out.append(t)
+                return
+        if name not in out:
+            out.append(name)
+
+    for cue in _FRAME_CUE_RE.finditer(text):
+        pos, skipped, names = cue.end(), 0, 0
+        current: list[str] = []
+        while names < _FRAME_MAX_NAMES:
+            sep = _FRAME_SEP_RE.match(text, pos)
+            nxt = sep.end() if sep else pos
+            m = _TOKEN_RE.match(text, nxt)
+            if not m:
+                break
+            # A separator carrying sentence punctuation closes the frame.
+            if sep and re.search(r"[.;:!?()]", sep.group(0)):
+                break
+            pos = nxt
+            tok = m.group(0)
+            low = tok.lower()
+            if _name_token(tok):
+                current.append(tok)
+                pos = m.end()
+                continue
+            if current:
+                # A lowercase word ends the name; a connector may resume it.
+                emit(" ".join(current))
+                names += 1
+                current = []
+                if low in _FRAME_CONNECTORS:
+                    pos = m.end()
+                    continue
+                break
+            if low in _FRAME_SKIP_WORDS or skipped < _FRAME_MAX_SKIP:
+                skipped += 1
+                pos = m.end()
+                continue
+            break
+        if current:
+            emit(" ".join(current))
+
+    # "Skimlinks because they are an affiliate marketing service provider."
+    lead = _TOKEN_RE.match(text.strip())
+    if lead and _name_token(lead.group(0)):
+        head: list[str] = []
+        pos, stripped = 0, text.strip()
+        while (m := _TOKEN_RE.match(stripped, pos)) and _name_token(m.group(0)):
+            head.append(m.group(0))
+            pos = m.end()
+            while pos < len(stripped) and stripped[pos] == " ":
+                pos += 1
+        if (head and head[0].lower() not in _SENTENCE_OPENERS
+                and (_NAME_THEN_ROLE_RE.match(stripped[pos:])
+                     or _NAME_THEN_LINK_RE.match(stripped[pos:]))):
+            emit(" ".join(head))
+    return out
 
 
 def _is_first_party(name: str, first_party: set[str] | None) -> bool:
@@ -286,7 +477,9 @@ def detect_orgs(
         seen.add(name)
         found[name] = typ
     ents = ner_ents if ner_ents is not None else (ner_fn(text) if ner_fn else [])
-    for ent in ents:
+    framed = frame_named_orgs(text)
+    framed_keys = {f.strip(" .,:;-•").lower() for f in framed}
+    for ent in list(ents) + framed:
         if CATEGORY_RE.fullmatch(ent.strip()) or GENERIC_RE.search(ent):
             continue
         cleaned = clean_ner_org(ent)
@@ -295,7 +488,10 @@ def detect_orgs(
         key = cleaned.lower()
         if key in seen or _is_first_party(cleaned, first_party):
             continue
-        if prose_precision and key not in _GAZ_TYPE and not _CORP_SUFFIX_RE.search(cleaned):
+        if (prose_precision and key not in _GAZ_TYPE
+                and key not in framed_keys
+                and not _CORP_SUFFIX_RE.search(cleaned)
+                and not in_naming_frame(text, cleaned)):
             continue
         seen.add(key)
         found[cleaned] = classify_org(cleaned)

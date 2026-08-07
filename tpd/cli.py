@@ -19,12 +19,17 @@ from .collect.runner import (
 from .evaluate import (
     relevance,
     agreement,
+    arrangement_coverage,
+    chain_verification,
     latency,
     naming_rate,
     policy_identification,
     structured_list_identification,
     ontology_accommodation,
     propagation,
+    load_chain_gold,
+    load_coverage_gold,
+    load_entity_domains,
     load_relevance_gold,
     load_typology_gold,
     load_typology_gold_docs,
@@ -32,11 +37,17 @@ from .evaluate import (
     load_presence_gold,
     load_presence_doc_ids,
     load_propagation_gold,
+    sample_targets,
+    write_chain_sheet,
+    write_coverage_sheet,
+    write_entity_resolution_sheet,
     write_relevance_sheet,
     write_typology_sheet,
     write_propagation_sheet,
+    detected_arrangements,
     distinct_data_type_clauses,
     APP_TARGET_TYPES,
+    CHAIN_PARTIES,
 )
 
 # Fetch seed data
@@ -200,7 +211,10 @@ def _write_outputs(result, out_dir: str) -> None:
               help="seed for random target ordering")
 @click.option("--merge-gold-from", "merge_dir", default=None,
               help="existing dir to merge gold labels from.")
-def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, merge_dir) -> None:
+@click.option("--graph", "graph_path", default=None,
+              help="graph JSON for the chain and entity-resolution sheets")
+def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, merge_dir,
+          graph_path) -> None:
     """Emit pre-filled hand-labelling sheets"""
     from .classify.poligraph_connector import corpus_relations, poligraph_available
     from .evaluate.labeling import DEFAULT_ORDER_SEED
@@ -233,6 +247,39 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
                                      prior_path=prior_prop)
         click.echo(f"wrote {n3} propagation rows -> {prop} (random order, seed={seed})")
 
+        cov = Path(out_dir) / "coverage_labels.csv"
+        prior_cov = Path(merge_dir) / "coverage_labels.csv" if merge_dir else None
+        if prior_cov and not prior_cov.exists():
+            prior_cov = None
+        sample = sample_targets(ids or corpus.list_targets(), order_seed=seed)
+        n4 = write_coverage_sheet(relations_by_target, cov, sample, order_seed=seed,
+                                  prior_path=prior_cov)
+        click.echo(f"wrote {n4} coverage rows -> {cov} for {len(sample)} sampled "
+                   f"target(s): {', '.join(sample)}")
+
+    if graph_path:
+        from .sharing_graph import SharingGraph, sharing_chains
+
+        g = SharingGraph.load(graph_path)
+        chains_path = Path(out_dir) / "chain_labels.csv"
+        prior_chains = Path(merge_dir) / "chain_labels.csv" if merge_dir else None
+        if prior_chains and not prior_chains.exists():
+            prior_chains = None
+        found = sharing_chains(g, parties=CHAIN_PARTIES)
+        n5 = write_chain_sheet(found, g, chains_path, order_seed=seed,
+                               prior_path=prior_chains)
+        click.echo(f"wrote {n5} chain rows -> {chains_path} "
+                   f"({CHAIN_PARTIES} parties per chain)")
+
+        res_path = Path(out_dir) / "entity_resolution.csv"
+        prior_res = Path(merge_dir) / "entity_resolution.csv" if merge_dir else None
+        if prior_res and not prior_res.exists():
+            prior_res = None
+        overrides = load_entity_domains(prior_res) if prior_res else {}
+        n6 = write_entity_resolution_sheet(g, res_path, overrides=overrides,
+                                           prior_path=prior_res)
+        click.echo(f"wrote {n6} entity rows -> {res_path}")
+
 
 # --------------------------------------------------------------------------- #
 @cli.command(name="eval")
@@ -245,13 +292,20 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
               help="sheet with a target_id + gold_list_present column")
 @click.option("--propagation-gold", default=None,
               help="hand-reviewed propagation_labels.csv")
+@click.option("--chain-gold", default=None,
+              help="hand-verified chain_labels.csv")
+@click.option("--coverage-gold", default=None,
+              help="hand-labelled coverage_labels.csv")
+@click.option("--graph", "graph_path", default=None,
+              help="graph JSON the chain gold was written against")
 @click.option("--no-ner", is_flag=True)
 @click.option("--polisis", is_flag=True)
 @click.option("--workers", type=int, default=8, show_default=True,
               help="documents classified in parallel per target")
 @click.option("--include-unusable", is_flag=True)
 def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_presence_gold,
-          propagation_gold, no_ner, polisis, workers, include_unusable) -> None:
+          propagation_gold, chain_gold, coverage_gold, graph_path, no_ner, polisis,
+          workers, include_unusable) -> None:
     """Score key metrics."""
     corpus = Corpus(corpus_root)
     cache = None
@@ -322,6 +376,28 @@ def eval_(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
             else:
                 click.echo("No filled gold_correct rows found.")
 
+        if coverage_gold:
+            gold_arrangements = load_coverage_gold(coverage_gold)
+            if gold_arrangements:
+                detected = set(detected_arrangements(relations_by_target))
+                click.echo(arrangement_coverage(gold_arrangements, detected).summary)
+            else:
+                click.echo("No filled gold_arrangement rows found.")
+
+    if chain_gold:
+        if not graph_path:
+            click.echo("--chain-gold needs --graph to name the chains it verifies.")
+        else:
+            from .sharing_graph import SharingGraph, sharing_chains
+
+            g = SharingGraph.load(graph_path)
+            gold_chains = load_chain_gold(chain_gold)
+            if gold_chains:
+                click.echo(chain_verification(
+                    sharing_chains(g, parties=CHAIN_PARTIES), gold_chains).summary)
+            else:
+                click.echo("No filled gold_verified rows found.")
+
 
 # --------------------------------------------------------------------------- #
 @cli.command()
@@ -348,6 +424,160 @@ def polisis_cache(corpus_root, models_root) -> None:
     click.echo("running POLISIS over the full corpus doc set ...")
     path = build_cache(corpus_root, models_root=models_root)
     click.echo(f"wrote verdict cache -> {path}")
+
+
+# --------------------------------------------------------------------------- #
+def _target_relations(corpus, target_id, docs, first_party):
+    """Every relation one target's documents support."""
+    from .expand import relations_for_target
+
+    return relations_for_target(corpus, target_id, docs, first_party)
+
+
+@cli.command(name="graph")
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--out", "out_path", required=True, help="graph JSON output path")
+@click.option("--no-ner", is_flag=True, help="disable NER")
+@click.option("--include-unusable", is_flag=True)
+def graph_cmd(corpus_root, out_path, no_ner, include_unusable) -> None:
+    """Build the cross-target data-sharing graph from a corpus."""
+    from .classify.named_entities import first_party_tokens
+    from .sharing_graph import SharingGraph, add_target
+
+    corpus = Corpus(corpus_root)
+    ids = _eval_ids(corpus, include_unusable) or corpus.list_targets()
+    result = classify_corpus(corpus, use_ner=not no_ner, target_ids=list(ids))
+    by_target = {tc.target_id: tc for tc in result.targets}
+
+    g = SharingGraph()
+    for tid in ids:
+        target, docs = corpus.read_manifest(tid)
+        fp_urls = [target.seed_policy_url] + [
+            d.url for d in docs
+            if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
+        ]
+        first_party = first_party_tokens(fp_urls, name=target.name)
+        rels = _target_relations(corpus, tid, docs, first_party)
+        add_target(g, tid, target.name, rels, target_type=target.type)
+        tc = by_target.get(tid)
+        if tc:
+            for doc in tc.docs:
+                for org in doc.named_orgs:
+                    add_target(g, tid, target.name,
+                               [{"entity": org, "party": "third",
+                                 "unspecified": False, "data_type": "personal data",
+                                 "action": "be_shared", "negative": False,
+                                 "direction": "downstream", "purposes": [],
+                                 "sources": ["policy"], "text": "",
+                                 "doc_ids": [doc.doc_id]}],
+                               target_type=target.type)
+
+    g.save(out_path)
+    entities = sum(1 for n in g.nodes.values() if n.type.value == "entity")
+    unexpanded = sum(1 for nid in g.nodes if g.termination(nid) == "unexpanded")
+    click.echo(f"graph: {len(g.nodes)} nodes ({entities} entities), "
+               f"{len(g.edges)} edges, {unexpanded} unexpanded leaves")
+    click.echo(f"wrote {out_path}")
+
+
+@cli.command(name="expand")
+@click.option("--url", required=True, help="origin to walk outward from")
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--out", "out_path", required=True, help="graph JSON output path")
+@click.option("--hops", type=int, default=1, show_default=True,
+              help="how many rings of onward sharing to collect (1-3)")
+@click.option("--entity-domains", "domains_path", default=None,
+              help="hand-filled entity_resolution.csv supplying organisation domains")
+@click.option("--delay", type=float, default=0.2, show_default=True,
+              help="polite per-request delay (s)")
+@click.option("--force", is_flag=True, help="ignore the fetch cache")
+def expand_cmd(url, corpus_root, out_path, hops, domains_path, delay, force) -> None:
+    """Walk outward from one URL, collecting each party it shares with."""
+    from .expand import Expansion
+
+    overrides = load_entity_domains(domains_path) if domains_path else {}
+    exp = Expansion(corpus_root, url, hops=hops, delay=delay, force=force,
+                    overrides=overrides)
+    click.echo(f"walking {exp.origin} to {exp.hops} hop(s) ...")
+    exp.run()
+    exp.graph.save(out_path)
+    entities = sum(1 for n in exp.graph.nodes.values() if n.type.value == "entity")
+    click.echo(f"graph: {len(exp.graph.nodes)} nodes ({entities} entities), "
+               f"{len(exp.graph.edges)} edges, {exp.progress.crawled} origin(s) collected")
+    if exp.unresolved:
+        click.echo(f"{len(exp.unresolved)} party name(s) resolved to no site; "
+                   f"run `tpd label --graph {out_path}` for the resolution sheet")
+    click.echo(f"wrote {out_path}")
+
+
+@cli.command(name="chains")
+@click.option("--graph", "graph_path", required=True, help="graph JSON to read")
+@click.option("--parties", type=int, default=CHAIN_PARTIES, show_default=True,
+              help="organisations a chain must pass through")
+@click.option("--limit", type=int, default=1000, show_default=True,
+              help="stop enumerating after this many chains")
+def chains_cmd(graph_path, parties, limit) -> None:
+    """List the onward-sharing chains a graph contains."""
+    from .sharing_graph import SharingGraph, sharing_chains
+
+    g = SharingGraph.load(graph_path)
+    found = sharing_chains(g, parties=parties, limit=limit)
+
+    def label(nid):
+        node = g.nodes.get(nid)
+        return node.display_name if node and node.display_name else nid
+
+    for chain in found[:40]:
+        marks = "".join("~" if h.traffic_only else "-" for h in chain.hops)
+        click.echo(f"  [{marks}] " + " -> ".join(label(p) for p in chain.parties))
+    disclosed = sum(1 for c in found if c.fully_disclosed)
+    click.echo(f"\n{len(found)} chain(s) through {parties} parties; "
+               f"{disclosed} rest wholly on written disclosure "
+               f"(~ marks a hop evidenced only by observed traffic)")
+
+
+@cli.command(name="refresh")
+@click.option("--corpus", "corpus_root", required=True)
+@click.option("--no-ner", is_flag=True, help="disable NER")
+@click.option("--include-unusable", is_flag=True)
+def refresh_cmd(corpus_root, no_ner, include_unusable) -> None:
+    """Snapshot the corpus and report what changed since the last run."""
+    from .classify.named_entities import first_party_tokens
+    from .refresh import append_log, record_refresh
+
+    corpus = Corpus(corpus_root)
+    ids = _eval_ids(corpus, include_unusable) or corpus.list_targets()
+    result = classify_corpus(corpus, use_ner=not no_ner, target_ids=list(ids))
+    by_target = {tc.target_id: tc for tc in result.targets}
+
+    diffs = []
+    for tid in ids:
+        target, docs = corpus.read_manifest(tid)
+        fp_urls = [target.seed_policy_url] + [
+            d.url for d in docs
+            if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
+        ]
+        first_party = first_party_tokens(fp_urls, name=target.name)
+        rels = _target_relations(corpus, tid, docs, first_party)
+        tc = by_target.get(tid)
+        orgs = sorted({o for d in tc.docs for o in d.named_orgs}) if tc else []
+        diff = record_refresh(corpus, tid, orgs, rels)
+        diffs.append(diff)
+        if diff is not None and diff.content_changed:
+            flag = "REGRESSED" if diff.regressed else "changed"
+            click.echo(
+                f"  {tid:42s} {flag}: "
+                f"+{len(diff.added_parties)}/-{len(diff.removed_parties)} parties, "
+                f"{len(diff.changed_docs)} doc(s) revised, "
+                f"{len(diff.broken_docs)} doc(s) now failing"
+            )
+
+    baselines = sum(1 for d in diffs if d is None)
+    changed = [d for d in diffs if d is not None and d.content_changed]
+    click.echo(f"\n{len(diffs)} target(s): {baselines} new baseline(s), "
+               f"{len(changed)} changed, "
+               f"{sum(1 for d in changed if d.regressed)} regressed")
+    click.echo(f"wrote {append_log(corpus, diffs)}")
 
 
 if __name__ == "__main__":

@@ -35,8 +35,8 @@ MANUAL_SIDECAR = "manual_docs.json"
 
 _GOALS = {
     "relevance_targets": 100,
-    "presence_website": 100,
-    "presence_app": 100,
+    "presence_website": 50,
+    "presence_app": 50,
     "typology_docs": 50,
     "clauses": 30,
 }

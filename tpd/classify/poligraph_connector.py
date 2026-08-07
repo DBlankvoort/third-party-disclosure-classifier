@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from .structured_relations import DOWNSTREAM
+
 # Narrative roles worth structural sharing analysis.
 DEFAULT_ROLES = {
     "privacy_policy", "cookie_policy", "do_not_sell", "dpa",
@@ -14,7 +16,7 @@ DEFAULT_ROLES = {
 
 CACHE_NAME = "poligraph.json"
 
-PIPELINE_VERSION = 4
+PIPELINE_VERSION = 8
 
 _GRAPHER = None
 _IMPORT_ERROR: str | None = None
@@ -148,6 +150,7 @@ def relations_from_graph(
             "data_type": e.data_type,
             "action": e.action.value,
             "negative": e.edge_type == EdgeType.NOT_COLLECT,
+            "direction": DOWNSTREAM,
             "purposes": sorted(p.value for p in e.purposes),
             "examples": [] if fp else _named_examples(graph, e.entity),
             "qualifier": "",
@@ -163,7 +166,8 @@ def merge_relations(rel_lists) -> list[dict]:
     merged: dict[tuple, dict] = {}
     for rels in rel_lists:
         for r in rels:
-            key = (r["entity"], r["data_type"], r["action"], r["negative"])
+            key = (r["entity"], r["data_type"], r["action"], r["negative"],
+                   r.get("direction", DOWNSTREAM))
             if key in merged:
                 m = merged[key]
                 m["purposes"] = sorted(set(m["purposes"]) | set(r["purposes"]))
@@ -177,10 +181,11 @@ def merge_relations(rel_lists) -> list[dict]:
                     m["text"] = r["text"]
             else:
                 merged[key] = dict(r)
-    # Third-party positive edges first, then negatives, then first-party.
     return sorted(
         merged.values(),
-        key=lambda r: (r["party"] != "third", r["negative"], r["entity"], r["data_type"]),
+        key=lambda r: (r["party"] != "third", r["negative"],
+                       r.get("direction", DOWNSTREAM) != DOWNSTREAM,
+                       r["entity"], r["data_type"]),
     )
 
 

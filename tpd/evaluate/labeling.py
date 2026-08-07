@@ -28,6 +28,19 @@ PROPAGATION_FIELDS = [
     "label_order", "clause_id", "target_id", "entity", "data_type",
     "predicted_propagated", "gold_correct", "notes",
 ]
+ENTITY_RESOLUTION_FIELDS = [
+    "entity", "canonical_key", "named_by", "resolved_domain", "basis",
+    "gold_domain", "notes",
+]
+CHAIN_FIELDS = [
+    "label_order", "chain_id", "parties", "hop_kinds", "hop_sources",
+    "hop_data_types", "evidence", "traffic_only_hops", "gold_verified", "notes",
+]
+COVERAGE_FIELDS = [
+    "label_order", "target_id", "entity", "arrangement_id", "detected",
+    "detected_data_types", "detected_sources", "evidence",
+    "gold_arrangement", "notes",
+]
 
 
 def interleave_fresh(known: list, fresh: list, order_seed: int) -> list:
@@ -280,6 +293,252 @@ def load_propagation_gold(path: str | Path) -> dict[str, bool]:
             if cid and v:
                 gold[cid] = v in ("1", "true", "yes")
     return gold
+
+
+# --------------------------------------------------------------------------- #
+# Organisation -> site resolution
+# --------------------------------------------------------------------------- #
+def write_entity_resolution_sheet(graph, path: str | Path,
+                                  overrides: dict[str, str] | None = None,
+                                  prior_path: str | Path | None = None) -> int:
+    """Write the organisation-to-domain sheet a graph's expansion depends on."""
+    from ..entities import resolve_entity_domain, resolve_name
+    from ..sharing_graph import NodeType
+
+    prior: dict[str, tuple[str, str]] = {}
+    if prior_path:
+        with open(prior_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                key = row.get("canonical_key") or ""
+                if key:
+                    prior[key] = ((row.get("gold_domain") or ""),
+                                  (row.get("notes") or ""))
+
+    rows = []
+    for nid, node in graph.nodes.items():
+        if node.type is not NodeType.ENTITY:
+            continue
+        named_by = sorted({
+            (graph.nodes[e.src].display_name or e.src)
+            for e in graph.in_edges(nid) if e.src in graph.nodes
+        })
+        domain, basis = resolve_entity_domain(node.display_name, overrides=overrides)
+        if not domain and node.primary_domain:
+            domain, basis = node.primary_domain, "name_domain"
+        key = resolve_name(node.display_name).key
+        gold, notes = prior.get(key, ("", ""))
+        rows.append({
+            "entity": node.display_name,
+            "canonical_key": key,
+            "named_by": ";".join(named_by[:5]),
+            "resolved_domain": domain,
+            "basis": basis,
+            "gold_domain": gold,
+            "notes": notes,
+        })
+    rows.sort(key=lambda r: (bool(r["resolved_domain"]), r["entity"].lower()))
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=ENTITY_RESOLUTION_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
+def load_entity_domains(path: str | Path) -> dict[str, str]:
+    """Hand-supplied organisation-to-domain mappings, keyed canonically."""
+    out: dict[str, str] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            key = (row.get("canonical_key") or "").strip()
+            domain = (row.get("gold_domain") or "").strip().lower()
+            if key and domain:
+                out[key] = domain
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Onward-sharing chains
+# --------------------------------------------------------------------------- #
+def write_chain_sheet(chains, graph, path: str | Path,
+                      order_seed: int = DEFAULT_ORDER_SEED,
+                      prior_path: str | Path | None = None) -> int:
+    chains = list(chains)
+    random.Random(order_seed).shuffle(chains)
+
+    prior: dict[str, tuple[str, str]] = {}
+    if prior_path:
+        with open(prior_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                cid = row.get("chain_id") or ""
+                if cid:
+                    prior[cid] = ((row.get("gold_verified") or ""),
+                                  (row.get("notes") or ""))
+
+    def label(node_id: str) -> str:
+        node = graph.nodes.get(node_id)
+        return (node.display_name if node and node.display_name else node_id)
+
+    rows = 0
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CHAIN_FIELDS)
+        w.writeheader()
+        for order, chain in enumerate(chains, start=1):
+            gold, notes = prior.get(chain.id, ("", ""))
+            evidence = " | ".join(
+                f"{label(h.src)} -> {label(h.dst)}"
+                + (f" via {h.via_domain.split('::', 1)[-1]}" if h.via_domain else "")
+                + f" [{','.join(h.sources)}]"
+                for h in chain.hops
+            )
+            w.writerow({
+                "label_order": order,
+                "chain_id": chain.id,
+                "parties": " -> ".join(label(p) for p in chain.parties),
+                "hop_kinds": ";".join(h.kind for h in chain.hops),
+                "hop_sources": ";".join(",".join(h.sources) for h in chain.hops),
+                "hop_data_types": ";".join(
+                    ",".join(h.data_types) for h in chain.hops
+                ),
+                "evidence": evidence,
+                "traffic_only_hops": chain.traffic_only_hops,
+                "gold_verified": gold,
+                "notes": notes,
+            })
+            rows += 1
+    return rows
+
+
+def load_chain_gold(path: str | Path) -> dict[str, bool]:
+    """Hand-verified chains, keyed by chain_id."""
+    gold: dict[str, bool] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            cid = row.get("chain_id") or ""
+            v = (row.get("gold_verified") or "").strip().lower()
+            if cid and v:
+                gold[cid] = v in ("1", "true", "yes")
+    return gold
+
+
+# --------------------------------------------------------------------------- #
+# Arrangement coverage
+# --------------------------------------------------------------------------- #
+COVERAGE_SAMPLE_SIZE = 4
+
+
+def sample_targets(target_ids, n: int = COVERAGE_SAMPLE_SIZE,
+                   order_seed: int = DEFAULT_ORDER_SEED) -> list[str]:
+    """A reproducible random sample of targets to label exhaustively."""
+    ids = sorted(target_ids)
+    if len(ids) <= n:
+        return ids
+    return sorted(random.Random(order_seed).sample(ids, n))
+
+
+def arrangement_id(target_id: str, entity: str) -> str:
+    """The key one third-party arrangement is counted under."""
+    from ..entities import canonical_key
+
+    return f"{target_id}::{canonical_key(entity) or entity.strip().lower()}"
+
+
+def detected_arrangements(relations_by_target: dict[str, list[dict]],
+                          target_ids=None) -> dict[str, dict]:
+    """Third-party arrangements the analysis found, keyed by arrangement id."""
+    ids = set(target_ids) if target_ids is not None else None
+    out: dict[str, dict] = {}
+    for tid, rels in relations_by_target.items():
+        if ids is not None and tid not in ids:
+            continue
+        for r in rels:
+            if r.get("party") != "third" or not r.get("entity"):
+                continue
+            if r.get("negative"):
+                continue
+            key = arrangement_id(tid, r["entity"])
+            rec = out.setdefault(key, {
+                "arrangement_id": key, "target_id": tid, "entity": r["entity"],
+                "data_types": set(), "sources": set(), "text": "",
+            })
+            if r.get("data_type"):
+                rec["data_types"].add(r["data_type"])
+            rec["sources"].update(r.get("sources") or ())
+            rec["text"] = rec["text"] or (r.get("text") or "")
+    return out
+
+
+def write_coverage_sheet(relations_by_target: dict[str, list[dict]],
+                         path: str | Path, target_ids,
+                         order_seed: int = DEFAULT_ORDER_SEED,
+                         prior_path: str | Path | None = None) -> int:
+    prior: dict[str, tuple[str, str]] = {}
+    extra: list[dict] = []
+    if prior_path:
+        with open(prior_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                aid = row.get("arrangement_id") or ""
+                if not aid:
+                    continue
+                prior[aid] = ((row.get("gold_arrangement") or ""),
+                              (row.get("notes") or ""))
+                if (row.get("detected") or "").strip() == "0":
+                    extra.append(row)
+
+    detected = detected_arrangements(relations_by_target, target_ids)
+    rows = [
+        {
+            "target_id": rec["target_id"],
+            "entity": rec["entity"],
+            "arrangement_id": aid,
+            "detected": 1,
+            "detected_data_types": ";".join(sorted(rec["data_types"])),
+            "detected_sources": ";".join(sorted(rec["sources"])),
+            "evidence": (rec["text"] or "")[:200],
+        }
+        for aid, rec in detected.items()
+    ]
+    for row in extra:
+        if row["arrangement_id"] in detected:
+            continue
+        rows.append({
+            "target_id": row.get("target_id") or "",
+            "entity": row.get("entity") or "",
+            "arrangement_id": row["arrangement_id"],
+            "detected": 0,
+            "detected_data_types": "",
+            "detected_sources": "",
+            "evidence": row.get("evidence") or "",
+        })
+    rows.sort(key=lambda r: (r["target_id"], r["entity"].lower()))
+    random.Random(order_seed).shuffle(rows)
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=COVERAGE_FIELDS)
+        w.writeheader()
+        for order, row in enumerate(rows, start=1):
+            gold, notes = prior.get(row["arrangement_id"], ("", ""))
+            w.writerow({**row, "label_order": order,
+                        "gold_arrangement": gold, "notes": notes})
+    return len(rows)
+
+
+def load_coverage_gold(path: str | Path) -> dict[str, dict]:
+    """Hand-labelled arrangements, keyed by arrangement id."""
+    out: dict[str, dict] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            aid = row.get("arrangement_id") or ""
+            v = (row.get("gold_arrangement") or "").strip().lower()
+            if not aid or not v:
+                continue
+            out[aid] = {
+                "arrangement_id": aid,
+                "target_id": row.get("target_id") or "",
+                "entity": row.get("entity") or "",
+                "gold": v in ("1", "true", "yes"),
+            }
+    return out
 
 
 def load_typology_gold_docs(

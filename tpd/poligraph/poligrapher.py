@@ -8,7 +8,7 @@ from .annotators import DEFAULT_ANNOTATORS, AnnotatorContext, ParsedSentence
 from ..extract import DocTree
 from .graph import Action, EdgeType, Purpose, PoliGraph
 from .nlp import NLP, get_nlp
-from .normalize import PhraseNormalizer
+from .normalize import COMMON_POLICY_NOUNS, PhraseNormalizer
 from .phrase_graph import PhraseEdge, PhraseGraph, PhraseLabel
 from .purpose import PurposeClassifier, default_purpose_classifier
 
@@ -138,19 +138,25 @@ class PoliGrapher:
                 out[key] = None
         return out
 
-
-# dont lemmatize data
-_LEMMA_FIXUPS = {"datum": "data"}
+_LEMMA_FIXUPS = {"datum": "data", "medium": "media"}
 
 
 def _make_lemmatizer(nlp: NLP):
     def _lem(text: str) -> str:
         try:
-            doc = nlp.nlp(text)
-            return " ".join(
-                _LEMMA_FIXUPS.get(lemma, lemma)
-                for lemma in (t.lemma_.lower() for t in doc if not t.is_punct and not t.is_space)
-            )
+            out = []
+            for t in nlp.nlp(text):
+                if t.is_punct or t.is_space:
+                    continue
+                if t.pos_ == "PROPN" or (
+                    t.text[:1].isupper()
+                    and t.text.lower() not in COMMON_POLICY_NOUNS
+                ):
+                    out.append(t.text.lower())
+                    continue
+                lemma = t.lemma_.lower()
+                out.append(_LEMMA_FIXUPS.get(lemma, lemma))
+            return " ".join(out)
         except Exception:
             return text
     return _lem

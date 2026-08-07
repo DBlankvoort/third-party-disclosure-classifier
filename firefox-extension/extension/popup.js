@@ -80,18 +80,62 @@ function showOffline() {
   $("rescan").hidden = true;
 }
 
-async function activeTabUrl() {
+async function activeTab() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+async function activeTabUrl() {
+  const tab = await activeTab();
   return tab ? tab.url : null;
+}
+
+async function observedRequests() {
+  const tab = await activeTab();
+  if (!tab) return [];
+  try {
+    const res = await browser.runtime.sendMessage({
+      kind: "getRequests", tabId: tab.id,
+    });
+    return (res && res.requests) || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function capturedCmp() {
+  const tab = await activeTab();
+  if (!tab) return null;
+  try {
+    await browser.tabs.executeScript(tab.id, { file: "cmp.js" });
+  } catch (e) {
+    // Privileged pages and pages loaded before the extension refuse injection.
+  }
+  // cmp.js answers the dialog asynchronously, and executeScript resolves
+  // before it has finished.
+  for (let i = 0; i < 12; i++) {
+    try {
+      const res = await browser.runtime.sendMessage({ kind: "getCmp", tabId: tab.id });
+      if (res && res.cmp) return res.cmp;
+    } catch (e) {
+      return null;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return null;
 }
 
 async function analyze(url, force) {
   showStatus(force ? "Re-crawling…" : "Analyzing…");
-  const q = new URLSearchParams({ url });
-  if (force) q.set("force", "1");
+  const requests = await observedRequests();
+  const cmp = await capturedCmp();
   let data;
   try {
-    const resp = await fetch(`${BRIDGE}/analyze?${q}`);
+    const resp = await fetch(`${BRIDGE}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, force: !!force, requests, cmp }),
+    });
     data = await resp.json();
     if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   } catch (err) {
@@ -124,6 +168,61 @@ function render(d) {
   renderRights(d.rights || { links: {}, emails: [] }, d.origin);
   renderRollup("orgs", d.named_orgs);
   renderRollup("cats", d.category_terms);
+  renderObserved(d.observed_parties || [], d.undisclosed_parties || []);
+  renderCmp(d.cmp_parties || []);
+}
+
+function renderCmp(parties) {
+  const box = $("cmp-box");
+  box.hidden = parties.length === 0;
+  $("cmp-count").textContent = parties.length;
+
+  const note = $("cmp-note");
+  const readOff = parties.filter((p) => p.source !== "tcf").length;
+  note.hidden = parties.length === 0;
+  if (parties.length) {
+    note.textContent = readOff
+      ? "Read from the dialog's markup; names may be truncated or mis-split."
+      : "Reported by the consent platform through the IAB TCF interface.";
+  }
+
+  const wrap = $("cmp");
+  wrap.innerHTML = "";
+  for (const p of parties) {
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = p.entity;
+    tag.title = [p.surface, p.purposes.join(", ")].filter(Boolean).join(" · ");
+    wrap.append(tag);
+  }
+}
+
+function renderObserved(observed, undisclosed) {
+  const box = $("observed-box");
+  box.hidden = observed.length === 0;
+  $("observed-count").textContent = observed.length;
+  const undisclosedKeys = new Set(undisclosed.map((o) => o.entity));
+
+  const note = $("undisclosed-note");
+  note.hidden = undisclosed.length === 0;
+  if (undisclosed.length) {
+    note.textContent =
+      `${undisclosed.length} of these ${undisclosed.length === 1 ? "is" : "are"} ` +
+      "not named in any document fetched for this site.";
+  }
+
+  const wrap = $("observed");
+  wrap.innerHTML = "";
+  for (const o of observed) {
+    const tag = document.createElement("span");
+    // An observed party absent from the documents is the finding worth
+    // marking.
+    const isNew = undisclosedKeys.has(o.entity);
+    tag.className = "tag" + (isNew ? " neg" : "");
+    tag.textContent = o.entity + (isNew ? " · undisclosed" : "");
+    tag.title = `${o.requests} request(s) · ${o.domains.join(", ")}`;
+    wrap.append(tag);
+  }
 }
 
 function renderDocs(docs) {
@@ -270,8 +369,11 @@ function renderRelations(relations, enabled) {
     name.textContent = SOURCE_LABEL[source] || source;
     const n = document.createElement("span");
     n.className = "rel-examples";
+    const upstream = items[0].direction === "upstream";
     n.textContent = `${items.length} entit${items.length === 1 ? "y" : "ies"} · ` +
-      `${items[0].data_type} ${ACTION_LABEL[items[0].action] || items[0].action}`;
+      (upstream
+        ? `supply ${items[0].data_type} to this site`
+        : `${items[0].data_type} ${ACTION_LABEL[items[0].action] || items[0].action}`);
     head.append(name, n);
     li.append(head);
 
@@ -353,9 +455,10 @@ function graphModel(relations, originHost) {
     const combos = new Map();
     for (const r of items) combos.set(`${r.data_type}|${r.action}`, r);
     for (const r of combos.values()) {
+      const arrow = r.direction === "upstream" ? "→" : "←";
       edges.push({
         ent: idx, data: r.data_type, action: r.action, negative: false,
-        title: `${items.length} × ${SOURCE_SHORT[source] || source} ← ${r.data_type}`,
+        title: `${items.length} × ${SOURCE_SHORT[source] || source} ${arrow} ${r.data_type}`,
       });
     }
   }
@@ -608,4 +711,17 @@ let currentUrl = null;
 
 $("rescan").addEventListener("click", () => {
   if (currentUrl) analyze(currentUrl, true);
+});
+
+// The multi-hop network runs to thousands of parties and takes minutes to
+// collect, so it opens in a tab of its own rather than inside the popup.
+$("open-graph").addEventListener("click", async () => {
+  if (!currentUrl) return;
+  const tab = await activeTab();
+  const params = new URLSearchParams({ url: currentUrl });
+  if (tab) params.set("tab", String(tab.id));
+  await browser.tabs.create({
+    url: browser.runtime.getURL(`graph.html?${params.toString()}`),
+  });
+  window.close();
 });

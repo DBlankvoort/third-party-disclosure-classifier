@@ -150,6 +150,7 @@ class Document:
     tables: list[Table] = field(default_factory=list)
     links: list[tuple[str, str]] = field(default_factory=list)   # (anchor_text, href)
     raw: str = ""
+    list_items: set[str] = field(default_factory=set)
 
 
 def _clean(s: str) -> str:
@@ -252,6 +253,7 @@ class _TreeBuilder:
         self.heading_stack: list[Node] = [root]
         self.last_block: Node = root
         self.block_texts: list[str] = []   # segment candidates in document order
+        self.list_texts: set[str] = set()  # subset of block_texts carved from <li>
         self.text_parts: list[str] = []    # rendered strings in document order
         self.tables: list[Table] = []
 
@@ -300,6 +302,8 @@ class _TreeBuilder:
             seg = _clean(el.get_text(" "))
             if len(seg) >= 3:
                 self.block_texts.append(seg)
+                if name == "li":
+                    self.list_texts.add(seg)
 
         if name in _HEADING_LEVELS:
             if not suppress_nodes:
@@ -348,7 +352,8 @@ class DocTree:
     def __init__(self, root: Node, title: str = "", raw: str = "",
                  links: Optional[list[tuple[str, str]]] = None,
                  tables: Optional[list[Table]] = None,
-                 text: str = "", block_texts: Optional[list[str]] = None):
+                 text: str = "", block_texts: Optional[list[str]] = None,
+                 list_texts: Optional[set[str]] = None):
         self.root = root
         self.title = title
         self.raw = raw
@@ -356,6 +361,7 @@ class DocTree:
         self._tables = tables or []
         self._text = text
         self._block_texts = block_texts or []
+        self._list_texts = list_texts or set()
         self._segments: Optional[list[str]] = None
 
     # -------------------------------------------------------------- builders
@@ -398,7 +404,8 @@ class DocTree:
         text = _NL_RE.sub("\n\n", "\n".join(_clean(line) for line in text.splitlines()))
 
         return cls(root, title=title, raw=html, links=links, tables=tables,
-                   text=text.strip(), block_texts=builder.block_texts)
+                   text=text.strip(), block_texts=builder.block_texts,
+                   list_texts=builder.list_texts)
 
     @classmethod
     def from_text(cls, text: str) -> "DocTree":
@@ -500,6 +507,7 @@ class DocTree:
             tables=self._tables,
             links=self.links,
             raw=self.raw,
+            list_items=set(self._list_texts),
         )
 
 

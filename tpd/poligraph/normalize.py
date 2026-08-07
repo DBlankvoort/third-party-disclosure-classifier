@@ -32,6 +32,36 @@ _THIRD_PARTY_CUES = {"third party", "third parties", "third-party", "partner",
                      "recipient", "recipients"}
 _GENERIC_DATA_HEADS = {"information", "data", "datum", "detail", "details"}
 
+_DOCUMENT_TERMS = {
+    "agreement", "agreements", "addendum", "addenda", "annex", "annexes",
+    "appendix", "appendices", "schedule", "schedules", "exhibit", "exhibits",
+    "attachment", "attachments", "clause", "clauses", "section", "sections",
+    "article", "articles", "amendment", "amendments", "contract", "contracts",
+    "policy", "policies", "notice", "notices", "term", "terms", "statement",
+    "statements", "document", "documents", "dpa", "form", "forms", "sow",
+    "order", "orders",
+}
+_QUANTIFIERS = {
+    "most", "many", "some", "several", "few", "other", "others", "another",
+    "certain", "various", "each", "either", "both", "every", "any", "all",
+    "numerous", "multiple",
+}
+
+COMMON_POLICY_NOUNS = {
+    "ad", "ads", "advertiser", "advertisers", "advertising", "affiliate",
+    "affiliates", "agency", "agencies", "analytics", "app", "apps",
+    "application", "applications", "business", "businesses", "carrier",
+    "carriers", "company", "companies", "content", "controller", "controllers",
+    "customer", "customers", "client", "clients", "data", "device", "devices",
+    "information", "network", "networks", "operator", "operators", "partner",
+    "partners", "party", "parties", "platform", "platforms", "processor",
+    "processors", "product", "products", "provider", "providers", "publisher",
+    "publishers", "purpose", "purposes", "recipient", "recipients", "service",
+    "services", "site", "sites", "software", "subsidiary", "subsidiaries",
+    "supplier", "suppliers", "third", "user", "users", "vendor", "vendors",
+    "website", "websites",
+}
+
 _NON_NOMINAL_QUALIFIERS = {
     "access", "collect", "disclose", "gather", "obtain", "process", "provide",
     "receive", "record", "require", "retain", "send", "share", "store",
@@ -83,24 +113,45 @@ class PhraseNormalizer:
 
     # ---------------------------------------------------------------- entities
     def normalize_entity(self, phrase: str) -> str:
+        """The term an entity phrase denotes, or "" when it denotes no party."""
         text = phrase.strip().lower()
-        if any(w in _FIRST_PARTY_WORDS for w in text.split()):
-            # "we", "our company", "us"
-            if text.split() and text.split()[0] in _FIRST_PARTY_WORDS:
+        words = text.split()
+        if words and words[0] in _FIRST_PARTY_WORDS:
+            rest = self._strip_stops(" ".join(words[1:])) if len(words) > 1 else ""
+            if not rest or rest in _SELF_REFERENCE_SURFACES or rest in _FIRST_PARTY_WORDS:
                 return FIRST_PARTY
+            if self._is_generic_third_party(self._lemmatize(rest)):
+                return UNSPECIFIED_ACTOR
+            text = " ".join(words[1:])
         # known company -> normalized company name
         for member, rx in _company_patterns():
             if rx.search(text):
                 return member
+        if self._is_document(text):
+            return ""
+        words = re.findall(r"[a-z0-9'/-]+", text)
+        if words and words[0] in _QUANTIFIERS:
+            rest = self._lemmatize(" ".join(words[1:]))
+            if (self._is_generic_third_party(rest)
+                    or rest in _SELF_REFERENCE_SURFACES):
+                return UNSPECIFIED_ACTOR
         cleaned = self._strip_stops(text)
         if cleaned in _SELF_REFERENCE_SURFACES:
             return FIRST_PARTY
-        lemmas = self._lemmatize(cleaned)
+        lemmas = self._lemmatize(self._strip_stops(phrase, fold=False)).lower()
         # blanket third party
-        if not lemmas or any(cue in text for cue in _THIRD_PARTY_CUES) and \
-                self._is_generic_third_party(cleaned):
+        if not lemmas or self._is_generic_third_party(lemmas):
             return UNSPECIFIED_ACTOR
         return lemmas or UNSPECIFIED_ACTOR
+
+    @classmethod
+    def _is_document(cls, text: str) -> bool:
+        words = [w for w in re.findall(r"[a-z0-9'-]+", text) if w not in _STOPWORDS]
+        body = [w for w in words if not re.fullmatch(r"[0-9ivxlc]+", w)]
+        if not body:
+            return False
+        heads = {cls._naive_lemmatize(body[0]), cls._naive_lemmatize(body[-1])}
+        return bool(heads & _DOCUMENT_TERMS)
 
     def classify_party(self, phrase: str) -> str:
         """Return 'first', 'third', or 'other' for an entity phrase."""
@@ -125,20 +176,28 @@ class PhraseNormalizer:
         return lemmas[i:]
 
     @staticmethod
-    def _strip_stops(text: str) -> str:
-        words = re.findall(r"[a-z0-9'/]+", text.lower())
-        kept = [w for w in words if w not in _STOPWORDS]
+    def _strip_stops(text: str, fold: bool = True) -> str:
+        """Drop the phrase's stopwords."""
+        words = re.findall(r"[A-Za-z0-9'/]+", text.lower() if fold else text)
+        kept = [w for w in words if w.lower() not in _STOPWORDS]
         return " ".join(kept) if kept else " ".join(words)
 
     @staticmethod
     def _is_generic_third_party(cleaned: str) -> bool:
-        words = set(cleaned.split())
-        generic = {"third", "party", "parties", "partner", "partners", "vendor",
-                   "vendors", "provider", "providers", "service", "affiliate",
-                   "affiliates", "company", "companies", "business",
-                   "recipient", "recipients",
-                   "site", "sites", "website", "websites", "app", "apps",
-                   "application", "applications", "platform", "platforms"}
+        words = set(re.findall(r"[a-z0-9'/-]+", cleaned))
+        generic = {
+            "third", "party", "parties", "partner", "partners", "vendor",
+            "vendors", "provider", "providers", "service", "affiliate",
+            "affiliates", "company", "companies", "business", "recipient",
+            "recipients",
+            "processor", "processors", "subprocessor", "subprocessors",
+            "sub-processor", "sub-processors", "sub", "subcontractor",
+            "subcontractors", "controller", "controllers", "customer",
+            "customers", "client", "clients", "subscriber", "subscribers",
+            "supplier", "suppliers", "importer", "exporter",
+            "site", "sites", "website", "websites", "app", "apps",
+            "application", "applications", "platform", "platforms",
+        }
         return bool(words) and words <= generic
 
     @staticmethod

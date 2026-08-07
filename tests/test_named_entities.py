@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tpd.classify.named_entities import (
     _is_first_party,
     classify_org,
     clean_ner_org,
     detect_orgs,
     first_party_tokens,
+    frame_named_orgs,
     gazetteer_orgs,
+    in_naming_frame,
 )
 
 
@@ -112,5 +116,70 @@ class TestDetectOrgs:
                               prose_precision=True)
         assert orgs == ["Mystery Startup Inc"]
 
+    def test_naming_frame_admits_unknown_ner_name(self):
+        seg = "Data management companies, such as Formstack, that help us."
+        orgs, _ = detect_orgs(seg, ner_ents=["Formstack"], prose_precision=True)
+        assert orgs == ["Formstack"]
+
+
+class TestNamingFrames:
+    def test_exemplifier_frame(self):
+        assert in_naming_frame("providers such as Formstack, that help",
+                               "Formstack")
+
+    def test_bare_mention_is_not_a_frame(self):
+        assert not in_naming_frame("We reviewed Formstack last year.",
+                                   "Formstack")
+
+
+class TestFrameNamedOrgs:
+    def test_reads_coordinated_names(self):
+        seg = ("Software service providers such as Salesforce and mParticle "
+               "that assist us with our customer relationship management.")
+        assert frame_named_orgs(seg) == ["Salesforce", "mParticle"]
+
+    def test_reads_names_statistical_ner_misses(self):
+        assert frame_named_orgs(
+            "vouchers, such as i-Movo.") == ["i-Movo"]
+
+    def test_keeps_multiword_names_whole(self):
+        assert frame_named_orgs(
+            "providers, such as Amazon Web Services (AWS).",
+        ) == ["Amazon Web Services"]
+
+    def test_does_not_absorb_sentence_boundary(self):
+        assert frame_named_orgs(
+            "partners such as Nielsen. Please contact us.") == ["Nielsen"]
+
+    def test_splits_runs_of_distinct_brands(self):
+        assert frame_named_orgs(
+            "partners such as Facebook Twitter") == ["Facebook", "Twitter"]
+
+    def test_explanatory_opening_names_the_vendor(self):
+        assert frame_named_orgs(
+            "Skimlinks because they are an affiliate marketing provider.",
+        ) == ["Skimlinks"]
+
+    def test_pronoun_opening_is_not_a_vendor(self):
+        assert frame_named_orgs("It because of this.") == []
+
+    def test_strips_possessives(self):
+        assert frame_named_orgs(
+            "networks such as Platform-A’s reach") == ["Platform-A"]
+
     def test_nothing_found(self):
         assert detect_orgs("We value privacy.", ner_fn=None) == ([], "")
+
+
+class TestDocumentParts:
+    """A heading identifying part of the document names no organisation."""
+
+    @pytest.mark.parametrize("surface", [
+        "Annex II", "Annex", "Appendix A", "Schedule 1", "Exhibit B",
+        "Attachment 2", "Section 5", "Article 28",
+    ])
+    def test_document_parts_are_rejected(self, surface):
+        assert clean_ner_org(surface) is None
+
+    def test_a_company_whose_name_opens_with_such_a_word_survives(self):
+        assert clean_ner_org("Schedule Management Systems") == "Schedule Management Systems"

@@ -29,7 +29,9 @@ from .structural import StructuralSignals
 # Cap how many segments we scan.
 MAX_SEGMENTS = 600
 # Number of segments to run through NER.
-MAX_NER_SEGMENTS = 30
+MAX_NER_SEGMENTS = 400
+# Characters of qualifying text handed to NER.
+MAX_NER_CHARS = 120_000
 
 
 @dataclass
@@ -198,13 +200,16 @@ _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _UNSEGMENTED_MAX = 1200
 
 
-def _sentence_segments(segments) -> list[str]:
-    out: list[str] = []
+def _sentence_segments(segments, list_items: set[str] | None = None) -> list[tuple[str, bool]]:
+    """Split oversized segments into sentences, tagging each with list membership."""
+    items = list_items or set()
+    out: list[tuple[str, bool]] = []
     for seg in segments:
+        in_list = seg in items
         parts = [seg] if len(seg) <= _MAX_SEG_LEN else [
             p for p in _SENT_SPLIT_RE.split(seg) if p.strip()
         ]
-        out.extend(p for p in parts if len(p) <= _UNSEGMENTED_MAX)
+        out.extend((p, in_list) for p in parts if len(p) <= _UNSEGMENTED_MAX)
     return out
 
 
@@ -221,7 +226,10 @@ def _scan_prose(
     # Disclosure-context segments only.
     qualifying: list[str] = []
     inherit = 0
-    for seg in _sentence_segments(doc.segments[:MAX_SEGMENTS]):
+    in_list_run = False
+    for seg, is_item in _sentence_segments(
+        doc.segments[:MAX_SEGMENTS], getattr(doc, "list_items", None)
+    ):
         if _nav_junk(seg):
             continue
         # Do not consider informational headings pointing elsewhere.
@@ -234,14 +242,25 @@ def _scan_prose(
             q = _org_disclosure_context(seg, first_party)
         if q and not policy_ctx and not has_first_party_anchor(seg):
             q = False
-        if q:
+        if q or (in_list_run and is_item):
             qualifying.append(seg)
-            # Check qualifying lead-ins.
-            inherit = _LEADIN_CARRY if seg.rstrip().endswith(":") else 0
         elif inherit > 0:
             qualifying.append(seg)
             inherit -= 1
-    ner_segments = qualifying[:MAX_NER_SEGMENTS]
+        if q and seg.rstrip().endswith(":"):
+            inherit, in_list_run = _LEADIN_CARRY, True
+        elif not is_item:
+            in_list_run = False
+            if q:
+                inherit = 0
+
+    ner_segments: list[str] = []
+    budget = MAX_NER_CHARS
+    for seg in qualifying[:MAX_NER_SEGMENTS]:
+        if budget <= 0:
+            break
+        ner_segments.append(seg)
+        budget -= len(seg)
     batch_fn = getattr(ner_fn, "batch", None) if ner_fn else None
     if batch_fn is not None:
         ents_by_seg = batch_fn(ner_segments)

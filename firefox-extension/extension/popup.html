@@ -67,6 +67,18 @@
             <div id="firstparty" class="taglist"></div>
           </details>
 
+          <details id="observed-box" class="rollup" hidden>
+            <summary>Contacted by this page <span id="observed-count" class="count">0</span></summary>
+            <p id="undisclosed-note" class="empty" hidden></p>
+            <div id="observed" class="taglist"></div>
+          </details>
+
+          <details id="cmp-box" class="rollup" hidden>
+            <summary>Named by the consent dialog <span id="cmp-count" class="count">0</span></summary>
+            <p id="cmp-note" class="empty" hidden></p>
+            <div id="cmp" class="taglist"></div>
+          </details>
+
           <details id="orgs-box" class="rollup">
             <summary>Named organisations <span id="orgs-count" class="count">0</span></summary>
             <div id="orgs" class="taglist"></div>
@@ -84,6 +96,12 @@
           </div>
           <p id="graph-empty" class="empty" hidden>No relations to draw.</p>
           <div class="graph-legend" id="graph-legend"></div>
+          <button id="open-graph" class="rbtn primary wide">
+            Explore the network — 1, 2 or 3 hops ↗
+          </button>
+          <p class="empty tight">
+            Follows each party to its own disclosures.
+          </p>
 
           <h2 class="section-title">Your rights</h2>
           <div id="rights" class="rights"></div>

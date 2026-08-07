@@ -80,6 +80,12 @@ Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for argumen
 | --- | --- |
 | `tpd/lexicons.py` | Regex lexicons, clause heuristics |
 | `tpd/extract.py` | HTML → segments/tables/links representations |
+| `tpd/entities.py` | Organisation-name canonicalisation, domain ↔ entity resolution |
+| `tpd/traffic.py` | Third parties named by observed network requests |
+| `tpd/cmp.py` | Third parties named by a captured consent dialog |
+| `tpd/sharing_graph.py` | Cross-target graph of data-sharing arrangements |
+| `tpd/expand.py` | Outward multi-hop collection from one seed origin |
+| `tpd/refresh.py` | Snapshot and change tracking across collections |
 | `tpd/collect/` | Crawler |
 | `tpd/classify/` | Relevance, document-class, specificity, and typology classifiers |
 | `tpd/poligraph/` | PoliGraph re-implementation |

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="graph.css" />
+  <title>Sharing network</title>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <div>
+        <h1>Third-party sharing network</h1>
+        <p id="origin" class="origin">—</p>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="seg" id="hops" role="radiogroup" aria-label="Hops to collect">
+        <button data-hops="1" class="on">1 hop</button>
+        <button data-hops="2">2 hops</button>
+        <button data-hops="3">3 hops</button>
+      </div>
+      <button id="run" class="btn primary">Collect</button>
+      <button id="stop" class="btn" hidden>Stop</button>
+      <input id="search" class="search" type="search" placeholder="Find an organisation…" />
+    </div>
+  </header>
+
+  <div id="progress" class="progress" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="progress-text">Starting…</p>
+    <div class="bar"><i id="progress-bar"></i></div>
+  </div>
+
+  <main>
+    <div class="stage">
+      <canvas id="canvas"></canvas>
+      <div id="tooltip" class="tooltip" hidden></div>
+      <div id="empty" class="empty-state">
+        <p><strong>No network collected yet.</strong></p>
+        <p>Choose a depth and press Collect. Every party that can be resolved to
+           a site is crawled, so two and three hops run for minutes and reach
+           hundreds of organisations.</p>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="hint">drag to pan · scroll to zoom · click a node for its evidence · double-click to fit</div>
+    </div>
+
+    <aside class="panel">
+      <section class="stats">
+        <div><span id="stat-nodes">0</span><label>parties</label></div>
+        <div><span id="stat-edges">0</span><label>arrangements</label></div>
+        <div><span id="stat-crawled">0</span><label>sites collected</label></div>
+        <div><span id="stat-chains">0</span><label>4-party chains</label></div>
+      </section>
+
+      <section class="filters">
+        <h2>Show</h2>
+        <label><input type="checkbox" id="f-policy" checked /> stated in a policy</label>
+        <label><input type="checkbox" id="f-registry" checked /> named in a registry</label>
+        <label><input type="checkbox" id="f-traffic" checked /> observed in traffic</label>
+        <label><input type="checkbox" id="f-generic" checked /> unnamed categories</label>
+        <label><input type="checkbox" id="f-domains" /> contacted domains</label>
+      </section>
+
+      <section id="detail" class="detail">
+        <h2>Selection</h2>
+        <p class="empty">Click a node to see who it receives from and hands on to.</p>
+      </section>
+
+      <section id="unresolved-box" class="detail" hidden>
+        <h2>Named but not reachable <span id="unresolved-count" class="count">0</span></h2>
+        <p class="empty tight">
+          These parties are named in documents but resolve to no site, so the
+          walk stops at them. A hand-filled resolution sheet
+          (<code>tpd label --graph</code>) supplies their domains.
+        </p>
+        <div id="unresolved" class="taglist"></div>
+      </section>
+    </aside>
+  </main>
+
+  <section id="offline" class="offline" hidden>
+    <p><strong>Local analyzer not reachable.</strong></p>
+    <p>Start the bridge, then reload this page:</p>
+    <pre>python firefox-extension/server/server.py</pre>
+  </section>
+
+  <script src="graph.js"></script>
+</body>
+</html>

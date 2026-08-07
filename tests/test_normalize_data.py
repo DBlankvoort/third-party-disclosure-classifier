@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tpd.poligraph.graph import UNSPECIFIED_DATA
+from tpd.poligraph.graph import UNSPECIFIED_ACTOR, UNSPECIFIED_DATA
 from tpd.poligraph.normalize import PhraseNormalizer
 from tpd.poligraph.poligrapher import _make_lemmatizer
 
@@ -57,3 +57,35 @@ class TestOntologyTerms:
     ])
     def test_phrase_resolves_to_its_ontology_term(self, normalizer, phrase, term):
         assert normalizer.normalize_data(phrase) == term
+
+
+class TestEntityPhrases:
+    """An entity phrase names a party, a class of parties, or nothing at all."""
+
+    @pytest.mark.parametrize("phrase", [
+        "Agreement",
+        "this Agreement",
+        "Data Processing Agreement",
+        "Annex II",
+        "Schedule 1",
+        "Terms of Service",
+    ])
+    def test_an_instrument_names_no_party(self, normalizer, phrase):
+        assert normalizer.normalize_entity(phrase) == ""
+
+    @pytest.mark.parametrize("phrase", [
+        "each Party",
+        "the other Party",
+        "Sub-processors",
+        "Customer",
+        "Most platforms",
+    ])
+    def test_a_role_without_a_name_is_an_unspecified_party(self, normalizer, phrase):
+        assert normalizer.normalize_entity(phrase) == UNSPECIFIED_ACTOR
+
+    def test_a_proper_name_keeps_its_plural(self, normalizer):
+        # Lemmatising a name invents an organisation that does not exist.
+        assert normalizer.normalize_entity("Keywords Studios") == "keywords studios"
+
+    def test_a_named_vendor_survives(self, normalizer):
+        assert normalizer.normalize_entity("Skimlinks") == "skimlinks"

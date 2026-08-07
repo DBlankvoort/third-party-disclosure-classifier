@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import urlparse
 
-from tpd.collect.base import Corpus, Target
+from tpd.collect.base import Corpus
 from tpd.collect.runner import fetch_target
+from tpd.expand import origin_of, target_for_origin
 from tpd.classify.named_entities import first_party_tokens
 from tpd.classify.poligraph_connector import (
     merge_relations,
@@ -16,27 +16,10 @@ from tpd.classify.poligraph_connector import (
 )
 from tpd.classify.structured_relations import structured_relations_for_target
 from tpd.classify.run import classify_corpus
+from tpd.cmp import cmp_relations, cmp_vendors
 from tpd.extract import parse_html
-from tpd.typology import TargetType, media_of
-
-
-def origin_of(url: str) -> str:
-    """Get origin of URL."""
-    p = urlparse(url.strip())
-    if p.scheme not in ("http", "https") or not p.netloc:
-        raise ValueError(f"not an http(s) URL: {url!r}")
-    return f"{p.scheme}://{p.netloc}"
-
-
-def _target_for(origin: str) -> Target:
-    """A website Target for one origin."""
-    host = urlparse(origin).netloc
-    return Target(
-        id=f"{TargetType.WEBSITE.value}__{Target.make_id(host)}",
-        type=TargetType.WEBSITE.value,
-        name=host,
-        url=origin,
-    )
+from tpd.traffic import observed_hosts, traffic_relations
+from tpd.typology import media_of
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}")
@@ -83,6 +66,17 @@ def _rights_info(corpus: Corpus, raw_docs) -> dict:
     return {"links": links, "emails": emails[:3]}
 
 
+def _undisclosed(observed, named_orgs, relations) -> list[dict]:
+    """Observed parties that no fetched document names."""
+    from tpd.entities import canonical_key
+
+    disclosed = {canonical_key(o) for o in named_orgs}
+    for r in relations:
+        if "traffic" not in r.get("sources", []):
+            disclosed.add(canonical_key(r["entity"]))
+    return [o for o in observed if canonical_key(o["entity"]) not in disclosed]
+
+
 def _empty(origin: str, target_id: str, cached: bool) -> dict:
     return {
         "origin": origin,
@@ -103,6 +97,9 @@ def _empty(origin: str, target_id: str, cached: bool) -> dict:
         "sharing_relations": [],
         "poligraph": False,
         "rights": {"links": {}, "emails": []},
+        "observed_parties": [],
+        "undisclosed_parties": [],
+        "cmp_parties": [],
     }
 
 
@@ -113,11 +110,13 @@ def analyze_url(
     use_poligraph: bool = True,
     force: bool = False,
     delay: float = 0.2,
+    requests: list[dict] | None = None,
+    cmp: dict | None = None,
 ) -> dict:
     """Collect + classify the origin of a URL."""
     origin = origin_of(url)
     corpus = Corpus(corpus_root)
-    target = _target_for(origin)
+    target = target_for_origin(origin)
 
     _html_cache: dict[str, str] = {}
     _read_doc_html = corpus.read_doc_html
@@ -165,7 +164,13 @@ def analyze_url(
     structured_rels = structured_relations_for_target(
         corpus, raw_docs, first_party=first_party,
     )
-    sharing = merge_relations([prose_rels, structured_rels])
+    # Observed requests name parties the documents may omit entirely.
+    observed = observed_hosts(requests, origin, first_party=first_party)
+    traffic_rels = traffic_relations(requests, origin, first_party=first_party)
+    # The consent dialog names parties the crawled documents never render.
+    cmp_parties = cmp_vendors(cmp, first_party=first_party)
+    cmp_rels = cmp_relations(cmp, first_party=first_party)
+    sharing = merge_relations([prose_rels, structured_rels, traffic_rels, cmp_rels])
 
     # Per-document view.
     documents = [
@@ -207,4 +212,7 @@ def analyze_url(
         "sharing_relations": sharing,
         "poligraph": poligraph_on,
         "rights": _rights_info(corpus, raw_docs),
+        "observed_parties": observed,
+        "undisclosed_parties": _undisclosed(observed, named, sharing),
+        "cmp_parties": cmp_parties,
     }
