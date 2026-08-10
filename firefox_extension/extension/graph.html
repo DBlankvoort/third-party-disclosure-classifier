@@ -22,8 +22,14 @@
         <button data-hops="2">2 hops</button>
         <button data-hops="3">3 hops</button>
       </div>
+      <div class="seg" id="track" role="radiogroup" aria-label="Arrangements to show">
+        <button data-track="personal_data" class="on">personal data</button>
+        <button data-track="inventory">ad inventory</button>
+        <button data-track="both">both</button>
+      </div>
       <button id="run" class="btn primary">Collect</button>
       <button id="stop" class="btn" hidden>Stop</button>
+      <button id="edit-toggle" class="btn">Edit</button>
       <input id="search" class="search" type="search" placeholder="Find an organisation…" />
     </div>
   </header>
@@ -51,7 +57,7 @@
     <aside class="panel">
       <section class="stats">
         <div><span id="stat-nodes">0</span><label>parties</label></div>
-        <div><span id="stat-edges">0</span><label>arrangements</label></div>
+        <div><span id="stat-edges">0</span><label id="stat-edges-label">personal-data arrangements</label></div>
         <div><span id="stat-crawled">0</span><label>sites collected</label></div>
         <div><span id="stat-chains">0</span><label>4-party chains</label></div>
       </section>
@@ -63,6 +69,13 @@
         <label><input type="checkbox" id="f-traffic" checked /> observed in traffic</label>
         <label><input type="checkbox" id="f-generic" checked /> unnamed categories</label>
         <label><input type="checkbox" id="f-domains" /> contacted domains</label>
+        <label><input type="checkbox" id="f-ungrounded" checked /> names no register knows</label>
+      </section>
+
+      <section id="edit-box" class="detail edit" hidden>
+        <h2>Editing</h2>
+        <div id="edit-actions" class="edit-actions"></div>
+        <p id="edit-status" class="empty tight"></p>
       </section>
 
       <section id="detail" class="detail">

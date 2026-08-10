@@ -188,11 +188,12 @@ def polisis_cache(corpus_root, models_root) -> None:
 
 
 # --------------------------------------------------------------------------- #
-def _target_relations(corpus, target_id, docs, first_party):
+def _target_relations(corpus, target_id, docs, first_party, target_type="website"):
     """Every relation one target's documents support."""
     from .expand import relations_for_target
 
-    return relations_for_target(corpus, target_id, docs, first_party)
+    return relations_for_target(corpus, target_id, docs, first_party,
+                                target_type=target_type)
 
 
 @cli.command(name="graph")
@@ -202,8 +203,9 @@ def _target_relations(corpus, target_id, docs, first_party):
 @click.option("--include-unusable", is_flag=True)
 def graph_cmd(corpus_root, out_path, no_ner, include_unusable) -> None:
     """Build the cross-target data-sharing graph from a corpus."""
-    from .classify.named_entities import first_party_tokens
+    from .classify.named_entities import first_party_tokens, grounded_org
     from .sharing_graph import SharingGraph, add_target
+    from .tracks import PERSONAL_DATA, UNKNOWN
 
     corpus = Corpus(corpus_root)
     ids = _target_ids(corpus, include_unusable) or corpus.list_targets()
@@ -218,7 +220,8 @@ def graph_cmd(corpus_root, out_path, no_ner, include_unusable) -> None:
             if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
         ]
         first_party = first_party_tokens(fp_urls, name=target.name)
-        rels = _target_relations(corpus, tid, docs, first_party)
+        rels = _target_relations(corpus, tid, docs, first_party,
+                                 target_type=target.type)
         add_target(g, tid, target.name, rels, target_type=target.type)
         tc = by_target.get(tid)
         if tc:
@@ -228,17 +231,37 @@ def graph_cmd(corpus_root, out_path, no_ner, include_unusable) -> None:
                                [{"entity": org, "party": "third",
                                  "unspecified": False, "data_type": "personal data",
                                  "action": "be_shared", "negative": False,
-                                 "direction": "downstream", "purposes": [],
+                                 "direction": "downstream",
+                                 "track": PERSONAL_DATA, "subject": UNKNOWN,
+                                 "grounded": grounded_org(org),
+                                 "purposes": [],
                                  "sources": ["policy"], "text": "",
                                  "doc_ids": [doc.doc_id]}],
                                target_type=target.type)
 
     g.save(out_path)
-    entities = sum(1 for n in g.nodes.values() if n.type.value == "entity")
     unexpanded = sum(1 for nid in g.nodes if g.termination(nid) == "unexpanded")
-    click.echo(f"graph: {len(g.nodes)} nodes ({entities} entities), "
-               f"{len(g.edges)} edges, {unexpanded} unexpanded leaves")
+    _report_graph(g)
+    click.echo(f"{unexpanded} unexpanded leaves")
     click.echo(f"wrote {out_path}")
+
+
+def _report_graph(graph) -> None:
+    """Summarise a graph without quoting one edge count for both tracks."""
+    from .tracks import INVENTORY, PERSONAL_DATA
+
+    entities = sum(1 for n in graph.nodes.values() if n.type.value == "entity")
+    ungrounded = sum(
+        1 for n in graph.nodes.values()
+        if n.type.value == "entity" and not n.grounded
+    )
+    counts = graph.edge_counts()
+    click.echo(
+        f"graph: {len(graph.nodes)} nodes ({entities} entities, "
+        f"{ungrounded} resting on their document alone); "
+        f"{counts[PERSONAL_DATA]} personal-data edge(s), "
+        f"{counts[INVENTORY]} inventory edge(s)"
+    )
 
 
 @cli.command(name="expand")
@@ -251,23 +274,33 @@ def graph_cmd(corpus_root, out_path, no_ner, include_unusable) -> None:
               help="hand-filled entity_resolution.csv supplying organisation domains")
 @click.option("--delay", type=float, default=0.2, show_default=True,
               help="polite per-request delay (s)")
+@click.option("--origin-deadline", type=float, default=None,
+              help="seconds one origin's collection may consume (0 for no bound)")
+@click.option("--split-tracks", is_flag=True,
+              help="also write one graph file per track")
 @click.option("--force", is_flag=True, help="ignore the fetch cache")
-def expand_cmd(url, corpus_root, out_path, hops, domains_path, delay, force) -> None:
+def expand_cmd(url, corpus_root, out_path, hops, domains_path, delay,
+               origin_deadline, split_tracks, force) -> None:
     """Walk outward from one URL, collecting each party it shares with."""
-    from .expand import Expansion
+    from .expand import ORIGIN_DEADLINE, Expansion
 
     overrides = load_entity_domains(domains_path) if domains_path else {}
-    exp = Expansion(corpus_root, url, hops=hops, delay=delay, force=force,
-                    overrides=overrides)
+    exp = Expansion(
+        corpus_root, url, hops=hops, delay=delay, force=force,
+        overrides=overrides,
+        origin_deadline=ORIGIN_DEADLINE if origin_deadline is None else origin_deadline,
+    )
     click.echo(f"walking {exp.origin} to {exp.hops} hop(s) ...")
     exp.run()
     exp.graph.save(out_path)
-    entities = sum(1 for n in exp.graph.nodes.values() if n.type.value == "entity")
-    click.echo(f"graph: {len(exp.graph.nodes)} nodes ({entities} entities), "
-               f"{len(exp.graph.edges)} edges, {exp.progress.crawled} origin(s) collected")
+    _report_graph(exp.graph)
+    click.echo(f"{exp.progress.crawled} origin(s) collected")
     if exp.unresolved:
         click.echo(f"{len(exp.unresolved)} party name(s) resolved to no site")
     click.echo(f"wrote {out_path}")
+    if split_tracks:
+        for track, path in exp.graph.save_by_track(out_path).items():
+            click.echo(f"wrote {path} ({track})")
 
 
 @cli.command(name="chains")
@@ -276,24 +309,38 @@ def expand_cmd(url, corpus_root, out_path, hops, domains_path, delay, force) -> 
               help="organisations a chain must pass through")
 @click.option("--limit", type=int, default=1000, show_default=True,
               help="stop enumerating after this many chains")
-def chains_cmd(graph_path, parties, limit) -> None:
+@click.option("--track", type=click.Choice(["personal_data", "inventory", "both"]),
+              default="personal_data", show_default=True,
+              help="the arrangements a chain may be drawn from")
+@click.option("--subject-strict", is_flag=True,
+              help="require every continuation hop to state whose data it covers")
+def chains_cmd(graph_path, parties, limit, track, subject_strict) -> None:
     """List the onward-sharing chains a graph contains."""
     from .sharing_graph import SharingGraph, sharing_chains
+    from .tracks import TRACKS
 
     g = SharingGraph.load(graph_path)
-    found = sharing_chains(g, parties=parties, limit=limit)
+    wanted = TRACKS if track == "both" else (track,)
 
     def label(nid):
         node = g.nodes.get(nid)
         return node.display_name if node and node.display_name else nid
 
-    for chain in found[:40]:
-        marks = "".join("~" if h.traffic_only else "-" for h in chain.hops)
-        click.echo(f"  [{marks}] " + " -> ".join(label(p) for p in chain.parties))
-    disclosed = sum(1 for c in found if c.fully_disclosed)
-    click.echo(f"\n{len(found)} chain(s) through {parties} parties; "
-               f"{disclosed} rest wholly on written disclosure "
-               f"(~ marks a hop evidenced only by observed traffic)")
+    for one_track in wanted:
+        found = sharing_chains(g, parties=parties, limit=limit, track=one_track,
+                               subject_strict=subject_strict)
+        click.echo(f"\n== {one_track} ==")
+        for chain in found[:40]:
+            marks = "".join("~" if h.traffic_only else "-" for h in chain.hops)
+            click.echo(f"  [{marks}] " + " -> ".join(label(p) for p in chain.parties))
+        disclosed = sum(1 for c in found if c.fully_disclosed)
+        stated = sum(1 for c in found if c.subject_stated)
+        click.echo(
+            f"{len(found)} chain(s) through {parties} parties; "
+            f"{disclosed} rest wholly on written disclosure; "
+            f"{stated} state whose data every onward hop covers "
+            f"(~ marks a hop evidenced only by observed traffic)"
+        )
 
 
 @cli.command(name="refresh")
@@ -318,7 +365,8 @@ def refresh_cmd(corpus_root, no_ner, include_unusable) -> None:
             if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
         ]
         first_party = first_party_tokens(fp_urls, name=target.name)
-        rels = _target_relations(corpus, tid, docs, first_party)
+        rels = _target_relations(corpus, tid, docs, first_party,
+                                 target_type=target.type)
         tc = by_target.get(tid)
         orgs = sorted({o for d in tc.docs for o in d.named_orgs}) if tc else []
         diff = record_refresh(corpus, tid, orgs, rels)

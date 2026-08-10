@@ -10,8 +10,11 @@ import re
 CATEGORY_PATTERNS = [
     # "advertisers" is a category; "advertising" is not unless it heads a partner noun.
     r"advertisers?",
+    r"(?:third[- ]part(?:y|ies)\s+)?"
     r"advertis(?:ing|ement)\s+(?:partner|network|compan(?:y|ies)|service|provider|vendor|agenc(?:y|ies)|platform)s?",
     r"ad networks?", r"ad servers?", r"ad(?:[- ]?tech)\s+(?:partner|vendor|compan(?:y|ies))s?",
+    r"ad (?:compan(?:y|ies)|partner|vendor|platform|exchange)s?",
+    r"(?:demand|supply|sell)[- ]side platforms?",
     r"(?:third[- ]party\s+)?service providers?",
     r"sub[- ]?processors?",
     r"(?:business|marketing|trusted|strategic|distribution)\s+partners?",
@@ -92,6 +95,20 @@ POINTER_PHRASES = [
     r"can be found (?:at|here|on)",
 ]
 POINTER_RE = re.compile(r"\b(" + "|".join(POINTER_PHRASES) + r")\b", re.I)
+SERVICE_DATA_RE = re.compile(
+    r"\bon behalf of (?:our |their |its )?"
+    r"(?:clients?|customers?|partners?|publishers?|advertisers?|users)\b|"
+    r"\b(?:platform|service|services|client|customer|publisher|advertiser) data\b|"
+    r"\bdata (?:we |our clients? |our customers? )?"
+    r"(?:receive[ds]?|collected?|process(?:ed|es)?) (?:from|for) "
+    r"(?:our |their )?(?:clients?|customers?|publishers?|advertisers?|partners?)\b|"
+    r"\bbid (?:requests?|stream|data)\b|"
+    r"\b(?:acting |act )?as a (?:data )?processor\b|"
+    r"\bin our capacity as a (?:data )?processor\b|"
+    r"\bsub[- ]?processors?\b",
+    re.I,
+)
+
 
 # --------------------------------------------------------------------------- #
 # Document-class cues

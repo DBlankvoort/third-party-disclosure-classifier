@@ -46,6 +46,7 @@ browser.webRequest.onBeforeRequest.addListener(
 );
 
 browser.tabs.onRemoved.addListener((tabId) => perTab.delete(tabId));
+browser.tabs.onRemoved.addListener((tabId) => cmpByTab.delete(tabId));
 
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.kind === "getRequests") {
@@ -71,4 +72,3 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   return false;
 });
 
-browser.tabs.onRemoved.addListener((tabId) => cmpByTab.delete(tabId));

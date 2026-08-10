@@ -75,7 +75,10 @@
     const keys = ids.size ? [...ids] : Object.keys(vendors).map(Number);
     for (const id of keys) {
       const v = vendors[String(id)];
-      if (!v || !v.name) continue;
+      if (!v || !v.name) {
+        if (id > 0) out.push({ id });
+        continue;
+      }
       out.push({
         id,
         name: v.name,

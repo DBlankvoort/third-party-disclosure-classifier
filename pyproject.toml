@@ -43,6 +43,7 @@ include = ["tpd*"]
 
 [tool.setuptools.package-data]
 "tpd.poligraph.data" = ["*.json"]
+"tpd.kb.data" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

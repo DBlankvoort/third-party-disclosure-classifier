@@ -61,17 +61,27 @@ NER_STOP_RE = re.compile(
 NER_DEFINED_TERMS = {
     "service", "services", "site", "sites", "website", "websites", "content",
     "company", "app", "apps", "application", "applications", "platform",
-    "account", "accounts", "user", "users", "customer", "customers", "device",
+    "platforms", "account", "accounts", "user", "users", "customer",
+    "customers", "device",
     "devices", "product", "products", "software", "internet", "web", "online",
     "page", "pages", "feature", "features", "detect", "protect", "cookie",
     "cookies", "session", "sessions", "profile", "profiles", "ad", "ads",
     "advertisement", "advertisements", "subscription", "subscriptions",
-    # data-protection roles, document parts, and section-heading nouns.
     "controller", "controllers", "processor", "processors", "subprocessor",
     "sub-processor", "addendum", "ecosystem", "transfer", "transfers",
     "disclosure", "disclosures", "request", "requests", "consent", "integration",
     "integrations", "order", "property", "intellectual", "group", "framework",
     "extension", "password", "recipient", "recipients", "purpose", "purposes",
+    "party", "parties", "counterparty", "counterparties", "affiliate",
+    "affiliates", "vendor", "vendors", "partner", "partners", "supplier",
+    "suppliers", "importer", "importers", "exporter", "exporters",
+    "keyword", "keywords",
+}
+
+# Quantifiers standing where a name would.
+_QUANTIFIER_WORDS = {
+    "most", "each", "every", "certain", "various", "several", "many", "both",
+    "either", "multiple", "numerous", "no", "few",
 }
 
 # Jurisdictions named in international-transfer clauses.
@@ -157,7 +167,8 @@ def load_ner(enable: bool = True, nlp=None):
     return ner_fn, name
 
 
-def clean_ner_org(ent: str):
+def clean_ner_org(ent: str, allow_lowercase: bool = False):
+    """A usable organisation surface from one NER span, or None."""
     # Strip bullets / punctuation + determiners.
     s = re.sub(r"^[^0-9A-Za-z]+", "", ent.strip())
     s = _LEAD_DET_RE.sub("", s).strip(" .,:;-•")
@@ -167,7 +178,7 @@ def clean_ner_org(ent: str):
         return None
     # Vendor names capitalise internally as often as initially ("mParticle",
     # "i-Movo", "eBay"), so an uppercase letter anywhere carries the signal.
-    if not any(c.isupper() for c in s):
+    if not allow_lowercase and not any(c.isupper() for c in s):
         return None
     # Keep all-caps acronyms only if they are known by the gazetteer.
     if (
@@ -193,7 +204,10 @@ def clean_ner_org(ent: str):
         return None
     # Check for entities only consisting of generic terms (test 2)
     word_toks = [t for t in re.split(r"[^a-z0-9]+", core) if t]
-    if word_toks and all(t in NER_DEFINED_TERMS or t in _FUNCTION_WORDS for t in word_toks):
+    if word_toks and all(
+        t in NER_DEFINED_TERMS or t in _FUNCTION_WORDS or t in _QUANTIFIER_WORDS
+        for t in word_toks
+    ):
         return None
     # Remove category/generic descriptors
     if CATEGORY_RE.fullmatch(low) or GENERIC_RE.fullmatch(low):
@@ -355,24 +369,31 @@ def frame_named_orgs(text: str) -> list[str]:
             emit(" ".join(head))
     return out
 
+_MIN_BRAND_TOKEN = 3
+
 
 def _is_first_party(name: str, first_party: set[str] | None) -> bool:
     """Check an entity is first party."""
     if not first_party:
         return False
-    toks = {t for t in re.split(r"[^a-z0-9]+", name.lower()) if len(t) >= 4}
+    toks = {t for t in re.split(r"[^a-z0-9]+", name.lower())
+            if len(t) >= _MIN_BRAND_TOKEN}
     return bool(toks & first_party)
 
 
-_GENERIC_DOMAIN_LABELS = {
+_URL_STRUCTURE_LABELS = {
     "www", "com", "org", "net", "co", "io", "app", "apps", "gov", "edu", "ac",
     "go", "or", "ne", "store", "online", "site", "web", "info", "biz", "me",
     "privacy", "policy", "policies", "legal", "support", "help", "static",
-    "cdn", "assets", "page", "pages", "sites", "google", "play",
-    "github", "githubusercontent", "docs", "pastebin", "blogspot", "wordpress",
-    "wixsite", "weebly", "webnode", "notion", "netlify", "vercel", "herokuapp",
-    "firebaseapp", "appspot", "webflow", "squarespace", "tumblr", "medium",
+    "cdn", "assets", "page", "pages", "sites",
 }
+_SHARED_HOST_LABELS = {
+    "google", "play", "github", "githubusercontent", "docs", "pastebin",
+    "blogspot", "wordpress", "wixsite", "weebly", "webnode", "notion",
+    "netlify", "vercel", "herokuapp", "firebaseapp", "appspot", "webflow",
+    "squarespace", "tumblr", "medium",
+}
+_GENERIC_DOMAIN_LABELS = _URL_STRUCTURE_LABELS | _SHARED_HOST_LABELS
 
 
 # Corporate-form suffixes that are not distinguishing for first-party analysis.
@@ -390,11 +411,13 @@ def first_party_tokens(urls, name: str = "") -> set[str]:
     toks: set[str] = set()
     for u in urls or ():
         host = (urlparse(u).hostname or "").lower()
-        labels = [l for l in host.split(".") if len(l) >= 3 and l not in _GENERIC_DOMAIN_LABELS]
+        labels = [l for l in host.split(".")
+                  if len(l) >= _MIN_BRAND_TOKEN and l not in _GENERIC_DOMAIN_LABELS]
         if labels:
             toks.add(max(labels, key=len))
     for part in re.split(r"[^a-z0-9]+", (name or "").lower()):
-        if len(part) >= 4 and part not in _CORP_SUFFIX_TOKENS:
+        if (len(part) >= _MIN_BRAND_TOKEN and part not in _CORP_SUFFIX_TOKENS
+                and part not in _URL_STRUCTURE_LABELS):
             toks.add(part)
     return toks
 
@@ -436,6 +459,35 @@ def gazetteer_orgs(text: str) -> list[tuple[str, str]]:
         if name not in hits:
             hits[name] = _GAZ_TYPE.get(name, "company")
     return list(hits.items())
+
+def grounded_org(name: str) -> bool:
+    """Whether a surface identifies an organisation without its context."""
+    from ..entities import DISPLAY_FORMS, as_host, canonical_key, known_to_kb
+
+    surface = (name or "").strip()
+    if not surface:
+        return False
+    low = surface.lower()
+    if low in _GAZ_TYPE or canonical_key(surface) in DISPLAY_FORMS or as_host(surface):
+        return True
+    if known_to_kb(surface):
+        return True
+    if CATEGORY_RE.fullmatch(low) or GENERIC_RE.fullmatch(low):
+        return False
+    m = _CORP_SUFFIX_RE.search(surface)
+    if not m:
+        return False
+    stem = surface[:m.start()].strip(" .,")
+    if not stem or (CATEGORY_RE.search(stem.lower()) or GENERIC_RE.search(stem.lower())
+                    or stem.lower() in _FUNCTION_WORDS
+                    or stem.lower() in NER_DEFINED_TERMS):
+        return False
+    if m.group(0).strip(" .").lower() in _WEAK_CORP_TAILS:
+        return len(stem.split()) > 1
+    return True
+
+
+_WEAK_CORP_TAILS = {"co", "company"}
 
 
 def classify_org(text: str) -> str:

@@ -100,6 +100,32 @@ def stop_job(job_id: str) -> bool:
     job["expansion"].stop()
     return True
 
+EDIT_LOG_NAME = "graph_edits.jsonl"
+MAX_EDITS_PER_CALL = 200
+
+
+def apply_edits(job_id: str, edits: list) -> dict:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+    if job is None:
+        return {"error": "no such job", "job_id": job_id}
+    expansion = job["expansion"]
+    applied, rejected = expansion.apply_edits(edits[:MAX_EDITS_PER_CALL])
+    if applied:
+        _log_edits(expansion, applied)
+    return {"applied": len(applied), "rejected": rejected, "job_id": job_id}
+
+
+def _log_edits(expansion, edits: list) -> None:
+    path = Path(CONFIG["corpus_root"]) / EDIT_LOG_NAME
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            for edit in edits:
+                f.write(json.dumps({"origin": expansion.origin, **edit}) + "\n")
+    except OSError as exc:
+        sys.stderr.write(f"  edit log not written: {exc}\n")
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "tpd-extension-bridge/0.1"
@@ -136,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
     # hundreds of URLs, well past what a query string will carry.
     _MAX_BODY = 4 * 1024 * 1024
 
-    _PATHS = ["/health", "/analyze", "/graph", "/graph/stop"]
+    _PATHS = ["/health", "/analyze", "/graph", "/graph/stop", "/graph/edit"]
 
     def _body(self) -> dict | None:
         try:
@@ -154,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path not in ("/analyze", "/graph", "/graph/stop"):
+        if parsed.path not in ("/analyze", "/graph", "/graph/stop", "/graph/edit"):
             self._json(404, {"error": "not found", "paths": self._PATHS})
             return
         payload = self._body()
@@ -165,6 +191,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/graph/stop":
             job_id = payload.get("job_id") or ""
             self._json(200, {"stopped": stop_job(job_id), "job_id": job_id})
+            return
+
+        if parsed.path == "/graph/edit":
+            result = apply_edits(payload.get("job_id") or "",
+                                 payload.get("edits") or [])
+            self._json(404 if result.get("error") else 200, result)
             return
 
         url = payload.get("url") or (qs.get("url") or [""])[0]
@@ -270,6 +302,7 @@ def main() -> None:
           f"corpus={CONFIG['corpus_root']})")
     print("  GET  /analyze?url=https://example.com")
     print("  POST /graph {url, hops}  ->  GET /graph?job=<id>   ·   Ctrl-C to stop")
+    print("  POST /graph/edit {job_id, edits}  ->  corrections applied to a walk")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

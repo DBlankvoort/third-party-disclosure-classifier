@@ -7,9 +7,24 @@ import re
 
 from bs4 import BeautifulSoup
 
-from ..extract import _COOKIE_TABLE_RE, _VENDOR_COL_RE, _clean, _table_headers_and_rows
+from ..entities import as_host
+from ..extract import (
+    _COOKIE_TABLE_RE,
+    _VENDOR_COL_RE,
+    _clean,
+    _table_headers_and_rows,
+    cell_parties,
+    table_cell_grid,
+)
 from ..lexicons import ADS_TXT_ROW_RE, MACHINE_READABLE_ROLES, machine_readable_kind
 from ..poligraph.purpose import match_purpose_tags
+from ..tracks import (
+    NOT_APPLICABLE,
+    SERVICE_DATA,
+    SERVICE_DATA_ROLES,
+    SITE_VISITOR,
+    track_for_source,
+)
 from .named_entities import _is_first_party
 
 # --------------------------------------------------------------------------- #
@@ -52,6 +67,7 @@ def _relation(
     text: str = "",
     doc_id: str = "",
     direction: str = DOWNSTREAM,
+    subject: str = SITE_VISITOR,
 ) -> dict:
     return {
         "entity": entity.strip().lower(),
@@ -61,6 +77,9 @@ def _relation(
         "action": action,
         "negative": False,
         "direction": direction,
+        "track": track_for_source(source),
+        "subject": subject,
+        "grounded": True,
         "purposes": purposes or [],
         "examples": [],
         "qualifier": qualifier,
@@ -85,7 +104,7 @@ def _ads_txt_relations(raw: str, doc_id: str) -> list[dict]:
         out[domain] = _relation(
             domain, "advertising bid data", "be_sold",
             source="ads_txt", purposes=["advertising"], qualifier=kind,
-            text=m.group(0).strip(), doc_id=doc_id,
+            text=m.group(0).strip(), doc_id=doc_id, subject=NOT_APPLICABLE,
         )
     return list(out.values())
 
@@ -110,7 +129,7 @@ def _sellers_json_relations(raw: str, doc_id: str) -> list[dict]:
             source="sellers_json", purposes=["advertising"],
             qualifier=stype,
             text=f"seller_id={s.get('seller_id', '')} seller_type={stype or '?'}",
-            doc_id=doc_id, direction=UPSTREAM,
+            doc_id=doc_id, direction=UPSTREAM, subject=NOT_APPLICABLE,
         ))
     return out
 
@@ -157,7 +176,8 @@ def registry_relations(raw: str, doc_id: str = "") -> list[dict]:
 _ENTITY_COL_RE = re.compile(
     r"\b(host|domain|provider|vendors?|compan(?:y|ies)|organi[sz]ations?|"
     r"sub[- ]?processors?|processors?|partners?|recipients?|suppliers?|"
-    r"third[- ]part|set by|source|owner|supplier)\b", re.I,
+    r"third[- ]part|set by|source|owner|supplier|"
+    r"who (?:sets?|places?|provides?|serves?|receives?))\b", re.I,
 )
 _PURPOSE_COL_RE = re.compile(
     r"\b(purpose|category|type|description|function|used for|use)\b", re.I,
@@ -168,6 +188,8 @@ _ENTITY_CELL_STOP_RE = re.compile(
     r"various|see |recipients?)\b", re.I,
 )
 _MAX_ENTITY_CELL = 60
+_URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
+_PROSE_PUNCT_RE = re.compile(r"[;(]")
 
 
 def _clean_entity_cell(v: str) -> str:
@@ -175,9 +197,33 @@ def _clean_entity_cell(v: str) -> str:
     v = v.lstrip(".")  # ".doubleclick.net" -> "doubleclick.net"
     if (not v or len(v) > _MAX_ENTITY_CELL
             or not any(c.isalpha() for c in v)
+            or _URL_RE.match(v)
             or _ENTITY_CELL_STOP_RE.match(v)):
         return ""
     return v
+
+
+def _party_like(part: str) -> bool:
+    """Whether one piece of a divided cell reads as a party."""
+    part = part.strip()
+    return bool(
+        part and len(part) <= _MAX_ENTITY_CELL
+        and not _URL_RE.match(part)
+        and not _PROSE_PUNCT_RE.search(part)
+    )
+
+
+def _entity_cell_parties(v: str, tag=None) -> list[str]:
+    """The parties one entity cell names."""
+    if tag is not None:
+        marked = cell_parties(tag)
+        if len(marked) > 1 and all(_party_like(p) for p in marked):
+            return [c for c in (_clean_entity_cell(p) for p in marked) if c]
+    parts = [p.strip() for p in re.split(r"\s*[;,]\s*", _clean(v)) if p.strip()]
+    if len(parts) > 1 and all(as_host(p) for p in parts):
+        return [c for c in (_clean_entity_cell(p) for p in parts) if c]
+    cleaned = _clean_entity_cell(v)
+    return [cleaned] if cleaned else []
 
 
 def table_relations(
@@ -222,23 +268,29 @@ def table_relations(
             continue
 
         source = "cookie_table" if cookie_table else "vendor_table"
-        for cells in body:
+        subject = SERVICE_DATA if role in SERVICE_DATA_ROLES else SITE_VISITOR
+        tag_body = table_cell_grid(tbl)[1:]
+        for row_idx, cells in enumerate(body):
             if ent_idx >= len(cells):
-                continue
-            entity = _clean_entity_cell(cells[ent_idx])
-            if not entity or _is_first_party(entity, first_party):
                 continue
             purpose_text = cells[purp_idx] if (
                 purp_idx is not None and purp_idx < len(cells)) else ""
             purposes = purposes_from_text(purpose_text) or list(default_purposes)
-            key = entity.lower()
-            if key in out:
-                out[key]["purposes"] = sorted(set(out[key]["purposes"]) | set(purposes))
-                continue
-            out[key] = _relation(
-                entity, data_type, action, source=source,
-                purposes=purposes, text=purpose_text, doc_id=doc_id,
-            )
+            tags = tag_body[row_idx] if row_idx < len(tag_body) else []
+            ent_tag = tags[ent_idx] if ent_idx < len(tags) else None
+            for entity in _entity_cell_parties(cells[ent_idx], ent_tag):
+                if _is_first_party(entity, first_party):
+                    continue
+                key = entity.lower()
+                if key in out:
+                    out[key]["purposes"] = sorted(
+                        set(out[key]["purposes"]) | set(purposes))
+                    continue
+                out[key] = _relation(
+                    entity, data_type, action, source=source,
+                    purposes=purposes, text=purpose_text, doc_id=doc_id,
+                    subject=subject,
+                )
     return list(out.values())
 
 

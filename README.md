@@ -85,7 +85,9 @@ Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
 | --- | --- |
 | `tpd/lexicons.py` | Regex lexicons, clause heuristics |
 | `tpd/extract.py` | HTML → segments/tables/links representations |
+| `tpd/tracks.py` | Track and data-subject vocabulary carried by every relation |
 | `tpd/entities.py` | Organisation-name canonicalisation, domain ↔ entity resolution |
+| `tpd/kb/` | Tracker Radar, the TCF Global Vendor List, holding companies, headquarters countries |
 | `tpd/traffic.py` | Third parties named by observed network requests |
 | `tpd/cmp.py` | Third parties named by a captured consent dialog |
 | `tpd/sharing_graph.py` | Cross-target graph of data-sharing arrangements |
@@ -105,6 +107,7 @@ Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
 | --- | --- |
 | `evaluation/tpd_eval/labeling.py` | Labelling sheets and gold-label loading |
 | `evaluation/tpd_eval/metrics.py` | Agreement, coverage, identification, chain, and latency metrics |
+| `evaluation/tpd_eval/findings.py` | Measurements behind the findings page |
 | `evaluation/tpd_eval/annotate/` | Manual gold-labelling interface |
 | `evaluation/data_sources/` | Seed lists the study corpora were sampled from |
 | `evaluation/labels/` | Hand-assigned gold labels per corpus |

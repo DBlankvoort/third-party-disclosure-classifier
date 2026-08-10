@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .classify.named_entities import first_party_tokens
+from .classify.named_relations import named_org_relations
 from .classify.poligraph_connector import (
     merge_relations,
     poligraph_available,
@@ -16,7 +19,7 @@ from .classify.poligraph_connector import (
 )
 from .classify.structured_relations import structured_relations_for_target
 from .cmp import cmp_relations
-from .collect.base import Corpus, Target
+from .collect.base import Corpus, Target, deadline
 from .collect.runner import fetch_target
 from .entities import observed_domain_hints, resolve_entity_domain, resolve_name
 from .sharing_graph import (
@@ -29,6 +32,10 @@ from .traffic import observed_hosts, traffic_relations
 from .typology import TargetType
 
 FETCH_WORKERS = 8
+
+ANALYSIS_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
+
+ORIGIN_DEADLINE = 120.0
 
 
 def origin_of(url: str) -> str:
@@ -50,9 +57,16 @@ def target_for_origin(origin: str) -> Target:
     )
 
 
-def relations_for_target(corpus: Corpus, target_id: str, docs, first_party) -> list[dict]:
+def relations_for_target(
+    corpus: Corpus, target_id: str, docs, first_party,
+    target_type: str = TargetType.WEBSITE.value,
+) -> list[dict]:
     """Every sharing relation one target's document set supports."""
-    lists = [structured_relations_for_target(corpus, docs, first_party=first_party)]
+    lists = [
+        structured_relations_for_target(corpus, docs, first_party=first_party),
+        named_org_relations(corpus, docs, target_type=target_type,
+                            first_party=first_party),
+    ]
     if poligraph_available():
         lists.append(target_relations(corpus, target_id, docs, first_party=first_party))
     return merge_relations(lists)
@@ -78,7 +92,8 @@ def analyse_origin(
     ]
     first_party = first_party_tokens(fp_urls, name=target.name)
     relations = merge_relations([
-        relations_for_target(corpus, target.id, docs, first_party),
+        relations_for_target(corpus, target.id, docs, first_party,
+                             target_type=target.type),
         traffic_relations(requests, origin, first_party=first_party),
         cmp_relations(cmp, first_party=first_party),
     ])
@@ -95,6 +110,35 @@ def fetch_origin(corpus: Corpus, origin: str, force: bool = False,
         return True
     fetch_target(target, corpus, force=force, delay=delay)
     return manifest.exists()
+
+
+def _init_analysis_worker() -> None:
+    """Confine each worker to one core and load the language model once."""
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ[var] = "1"
+    try:
+        import torch
+
+        torch.set_num_threads(1)
+    except Exception:  # noqa: BLE001
+        pass
+    from .classify.named_entities import load_ner
+    from .classify.poligraph_connector import warm_pipeline
+
+    warm_pipeline()
+    load_ner()
+
+
+def _analyse_job(payload: tuple) -> tuple[list[dict], bool]:
+    """Analyse one already-collected origin in a worker process."""
+    corpus_root, origin, delay = payload
+    try:
+        relations, _ = analyse_origin(
+            Corpus(corpus_root), origin, delay=delay, fetched=True,
+        )
+    except (FileNotFoundError, ValueError):
+        return [], False
+    return relations, True
 
 
 # --------------------------------------------------------------------------- #
@@ -145,16 +189,20 @@ class Expansion:
         overrides: dict[str, str] | None = None,
         workers: int = FETCH_WORKERS,
         cmp=None,
+        analysis_workers: int = ANALYSIS_WORKERS,
+        origin_deadline: float = ORIGIN_DEADLINE,
     ) -> None:
         self.corpus = Corpus(corpus_root)
         self.seed_url = seed_url
         self.origin = origin_of(seed_url)
         self.hops = max(1, min(3, int(hops)))
+        self.origin_deadline = origin_deadline
         self.requests = requests or []
         self.force = force
         self.delay = delay
         self.overrides = overrides or {}
         self.workers = max(1, workers)
+        self.analysis_workers = max(1, analysis_workers)
         self.cmp = cmp or {}
         self.graph = SharingGraph()
         self.progress = Progress(hops=self.hops)
@@ -169,6 +217,17 @@ class Expansion:
     @property
     def stopped(self) -> bool:
         return self._stop.is_set()
+
+    def apply_edits(self, edits) -> tuple[list, list]:
+        """Apply a reader's corrections to the graph as it stands."""
+        applied, rejected = [], []
+        with self._lock:
+            for edit in edits or ():
+                if isinstance(edit, dict) and self.graph.apply_edit(edit):
+                    applied.append(edit)
+                else:
+                    rejected.append(edit)
+        return applied, rejected
 
     def snapshot(self) -> dict:
         """The graph as built so far, with the current progress."""
@@ -194,7 +253,8 @@ class Expansion:
 
     def _run(self) -> SharingGraph:
         self._set(phase="fetching", hop=0, current=self.origin)
-        fetch_origin(self.corpus, self.origin, force=self.force, delay=self.delay)
+        with deadline(self.origin_deadline):
+            fetch_origin(self.corpus, self.origin, force=self.force, delay=self.delay)
         self._set(phase="analysing", crawled=1)
         relations, observed = analyse_origin(
             self.corpus, self.origin, requests=self.requests,
@@ -233,34 +293,52 @@ class Expansion:
 
         self._set(phase="analysing")
         nxt: list[_Party] = []
-        for party in parties:
+        for party, (relations, analysed) in self._analyse_ring(parties):
             if self.stopped:
                 break
-            self._set(current=party.name)
-            origin = f"https://{party.domain}"
-            analysed = True
-            try:
-                relations, _ = analyse_origin(
-                    self.corpus, origin, delay=self.delay, fetched=True,
-                )
-            except (FileNotFoundError, ValueError):
-                relations, analysed = [], False
             with self._lock:
                 expand_node(self.graph, party.node_id, relations, hop=hop,
                             primary_domain=party.domain, expanded=analysed)
                 self.progress.parties_done += 1
+                self.progress.current = party.name
             for onward in self._parties(party.node_id, hints):
                 if onward.node_id not in expanded:
                     nxt.append(onward)
         seen: set[str] = set()
         return [p for p in nxt if not (p.node_id in seen or seen.add(p.node_id))]
 
+    def _analyse_ring(self, parties: list[_Party]):
+        """Yield ``(party, (relations, analysed))`` for a whole ring."""
+        def payload(p: _Party) -> tuple:
+            return (str(self.corpus.root), f"https://{p.domain}", self.delay)
+
+        workers = min(self.analysis_workers, len(parties))
+        if workers <= 1:
+            for party in parties:
+                if self.stopped:
+                    return
+                self._set(current=party.name)
+                yield party, _analyse_job(payload(party))
+            return
+        ctx = multiprocessing.get_context("spawn")
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=ctx,
+                                   initializer=_init_analysis_worker)
+        try:
+            futures = {pool.submit(_analyse_job, payload(p)): p for p in parties}
+            for future in as_completed(futures):
+                if self.stopped:
+                    return
+                yield futures[future], future.result()
+        finally:
+            pool.shutdown(wait=not self.stopped, cancel_futures=True)
+
     def _fetch_party(self, party: _Party) -> None:
         if self.stopped:
             return
         self._set(current=party.name)
         try:
-            fetch_origin(self.corpus, f"https://{party.domain}", delay=self.delay)
+            with deadline(self.origin_deadline):
+                fetch_origin(self.corpus, f"https://{party.domain}", delay=self.delay)
         except Exception:  # noqa: BLE001
             return
         with self._lock:
@@ -316,9 +394,11 @@ def expand(
     delay: float = 0.2,
     overrides: dict[str, str] | None = None,
     cmp=None,
+    origin_deadline: float = ORIGIN_DEADLINE,
 ) -> SharingGraph:
     """Walk outward from ``seed_url`` and return the graph reached."""
     return Expansion(
         corpus_root, seed_url, hops=hops, requests=requests, force=force,
         delay=delay, overrides=overrides, cmp=cmp,
+        origin_deadline=origin_deadline,
     ).run()

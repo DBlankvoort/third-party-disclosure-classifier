@@ -159,3 +159,60 @@ class TestNameResolutionInTheGraph:
         node = next(n for n in g.nodes.values() if n.type is NodeType.ENTITY)
         assert node.display_name == "Google"
         assert node.primary_domain == ""
+
+
+class TestCorrections:
+    """A reader's corrections to a built graph."""
+
+    def _graph(self):
+        g = SharingGraph()
+        add_target(g, "website__pub", "pub.example",
+                   [_rel("Telaria"), _rel("Criteo")])
+        return g
+
+    def test_a_party_can_be_renamed_and_keeps_its_old_surface(self):
+        g = self._graph()
+        nid = entity_node_id("Criteo")
+        assert g.rename_node(nid, "Criteo SA")
+        assert g.nodes[nid].display_name == "Criteo SA"
+        assert "Criteo" in g.nodes[nid].aliases
+        assert g.nodes[nid].edited
+
+    def test_a_party_can_be_folded_into_another(self):
+        g = self._graph()
+        telaria, criteo = entity_node_id("Telaria"), entity_node_id("Criteo")
+        assert g.merge_nodes(telaria, criteo)
+        assert telaria not in g.nodes
+        assert not g.out_edges(telaria) and not g.in_edges(telaria)
+        edge = g.edges[(EdgeKind.DISCLOSES_SHARING_WITH.value,
+                        target_node_id("website__pub"), criteo)]
+        assert len(edge.evidence) == 2
+
+    def test_a_removed_party_takes_its_arrangements_with_it(self):
+        g = self._graph()
+        nid = entity_node_id("Criteo")
+        assert g.remove_node(nid)
+        assert nid not in g.nodes
+        assert not any(e.dst == nid for e in g.edges.values())
+
+    def test_an_arrangement_can_be_removed_on_its_own(self):
+        g = self._graph()
+        tid, nid = target_node_id("website__pub"), entity_node_id("Criteo")
+        assert g.remove_edge(EdgeKind.DISCLOSES_SHARING_WITH.value, tid, nid)
+        assert (EdgeKind.DISCLOSES_SHARING_WITH.value, tid, nid) not in g.edges
+        assert nid in g.nodes
+
+    def test_an_arrangement_can_be_moved_to_the_other_track(self):
+        from tpd.tracks import INVENTORY
+
+        g = self._graph()
+        tid, nid = target_node_id("website__pub"), entity_node_id("Criteo")
+        assert g.set_edge_track(EdgeKind.DISCLOSES_SHARING_WITH.value, tid, nid,
+                                INVENTORY)
+        assert g.edge_counts()[INVENTORY] == 1
+
+    def test_an_edit_naming_no_such_party_changes_nothing(self):
+        g = self._graph()
+        assert not g.apply_edit({"op": "rename", "node": "entity::nobody",
+                                 "display_name": "X"})
+        assert not g.apply_edit({"op": "nonsense"})

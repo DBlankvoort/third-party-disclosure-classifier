@@ -11,6 +11,8 @@ from pathlib import Path
 import tldextract
 
 from . import gazetteer
+from .kb import blocklist, gvl, jurisdiction, tracker_radar
+from .lexicons import CATEGORY_RE
 
 # The public suffix list is resolved offline.
 _TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=())
@@ -46,6 +48,8 @@ def clean_company_name(name: str) -> str:
         return name
     s = str(name).strip()
     if not s:
+        return s
+    if CATEGORY_RE.fullmatch(s.strip().lower()):
         return s
     prev = None
     # Repeat: names such as "Example Holdings Ltd" carry two strippable tails.
@@ -226,6 +230,101 @@ def _brand_label(domain: str) -> str:
     ext = _TLD_EXTRACTOR(domain)
     return ext.domain or domain.split(".")[0]
 
+ENTITY_ALIASES = {
+    "telaria": "magnite",
+    "tremorvideo": "magnite",
+    "tremorvideodsp": "magnite",
+    "tremorhub": "magnite",
+    "rubiconproject": "magnite",
+    "spotx": "magnite",
+    "spotxchange": "magnite",
+    "appnexus": "microsoft",
+    "xandr": "microsoft",
+    "doubleclick": "google",
+    "alphabet": "google",
+    "facebook": "meta",
+    "metaplatforms": "meta",
+    "twitter": "x",
+    "xcorp": "x",
+    "verizonmedia": "yahoo",
+    "oath": "yahoo",
+    "aol": "yahoo",
+}
+
+
+def merged_key(key: str) -> str:
+    """The key an organisation's several corporate identities share."""
+    return ENTITY_ALIASES.get(key, key)
+
+
+@lru_cache(maxsize=1)
+def _tracker_radar_names() -> dict[str, tracker_radar.EntityRecord]:
+    """Canonical key -> the Tracker Radar record for that organisation."""
+    out: dict[str, tracker_radar.EntityRecord] = {}
+    for rec in tracker_radar.index().entities.values():
+        key = merged_key(canonical_key(rec.display_name or rec.name))
+        if not key:
+            continue
+        held = out.get(key)
+        if held is None or rec.prevalence > held.prevalence:
+            out[key] = rec
+    return out
+
+
+@lru_cache(maxsize=1)
+def _gvl_names() -> dict[str, gvl.Vendor]:
+    """Canonical key -> the TCF Global Vendor List entry for that organisation."""
+    out: dict[str, gvl.Vendor] = {}
+    for vendor in gvl.vendors():
+        key = merged_key(canonical_key(vendor.name))
+        if key:
+            out.setdefault(key, vendor)
+    return out
+
+
+@lru_cache(maxsize=1)
+def _investor_parent_keys() -> frozenset[str]:
+    return frozenset(
+        merged_key(canonical_key(n)) for n in blocklist.investor_parents()
+        if canonical_key(n)
+    )
+
+
+@lru_cache(maxsize=1)
+def _country_keys() -> dict[str, str]:
+    return {
+        merged_key(canonical_key(name)): code
+        for name, code in jurisdiction.country_overrides().items()
+        if canonical_key(name)
+    }
+
+
+def is_investor_parent(name: str) -> bool:
+    """Whether a name identifies a holding company rather than a recipient."""
+    return merged_key(canonical_key(name)) in _investor_parent_keys()
+
+
+def country_for(name: str) -> str:
+    """The ISO-3166 alpha-2 headquarters country recorded for ``name``, or ""."""
+    return _country_keys().get(merged_key(canonical_key(name)), "")
+
+
+def kb_categories(name: str) -> list[str]:
+    """The purposes Tracker Radar attributes to an organisation's domains."""
+    rec = _tracker_radar_names().get(merged_key(canonical_key(name)))
+    return list(rec.categories) if rec else []
+
+
+def tcf_vendor(name: str):
+    """The party's entry in the TCF Global Vendor List, or None."""
+    return _gvl_names().get(merged_key(canonical_key(name)))
+
+
+def known_to_kb(name: str) -> bool:
+    """Whether a reference table recognises a surface as an organisation."""
+    key = merged_key(canonical_key(name))
+    return bool(key) and (key in _tracker_radar_names() or key in _gvl_names())
+
 
 def entity_for_domain(host: str) -> tuple[str, str]:
     """Return ``(display_name, basis)`` for the organisation behind ``host``.    """
@@ -234,6 +333,11 @@ def entity_for_domain(host: str) -> tuple[str, str]:
         return "", "unknown"
     if reg in DOMAIN_OWNERS:
         return DOMAIN_OWNERS[reg], "domain_map"
+    hit = tracker_radar.index().lookup_domain(host) or \
+        tracker_radar.index().lookup_domain(reg)
+    if hit is not None and hit.entity_name:
+        rec = tracker_radar.index().lookup_entity(hit.entity_name)
+        return (rec.display_name if rec else hit.entity_name), "tracker_radar"
     label = _brand_label(reg)
     if label in _GENERIC_LABELS:
         return reg, "domain"
@@ -329,6 +433,17 @@ class ResolvedName:
     display: str
     basis: str
     domain: str = ""
+    country: str = ""
+
+    @property
+    def grounded(self) -> bool:
+        """Whether a record independent of the reading recognises the name."""
+        return self.basis in _GROUNDED_BASES
+
+
+_GROUNDED_BASES = frozenset({
+    "domain_map", "display_map", "gazetteer", "tracker_radar", "tcf_gvl",
+})
 
 
 @lru_cache(maxsize=100_000)
@@ -342,24 +457,39 @@ def resolve_name(name: str) -> ResolvedName:
     if host:
         display, basis = entity_for_domain(host)
         display = display or host
-        key = canonical_key(display)
-        return ResolvedName(key, DISPLAY_FORMS.get(key, display), basis, host)
+        key = merged_key(canonical_key(display))
+        display = DISPLAY_FORMS.get(key, display)
+        return ResolvedName(key, display, basis, host, country_for(display))
 
     cleaned = clean_company_name(raw)
-    key = canonical_key(cleaned)
+    key = merged_key(canonical_key(cleaned))
     if not key:
         return ResolvedName(canonical_key(raw), raw, "name")
+
+    def resolved(display: str, basis: str, domain: str = "") -> ResolvedName:
+        return ResolvedName(key, display, basis, domain, country_for(display))
+
     curated = DISPLAY_FORMS.get(key)
     if curated:
-        return ResolvedName(key, curated, "display_map")
+        return resolved(curated, "display_map")
     gaz = _GAZ_DISPLAY.get(cleaned.lower())
     if gaz:
-        return ResolvedName(key, gaz, "gazetteer")
+        return resolved(gaz, "gazetteer")
+    tr = _tracker_radar_names().get(key)
+    if tr is not None:
+        candidates = _kb_domain_order(key, tr.domains)
+        return resolved(tr.display_name or tr.name, "tracker_radar",
+                        candidates[0] if candidates else "")
+    vendor = _gvl_names().get(key)
+    if vendor is not None:
+        domain = vendor.domain if not is_shared_platform(vendor.domain) else ""
+        return resolved(clean_company_name(vendor.name) or vendor.name,
+                        "tcf_gvl", domain)
     # A surface carrying its own capitalisation states the organisation's
     # preferred form, which no table can improve on.
     if any(c.isupper() for c in cleaned) and not cleaned.isupper():
-        return ResolvedName(key, cleaned, "surface")
-    return ResolvedName(key, _title_case(cleaned), "name")
+        return resolved(cleaned, "surface")
+    return resolved(_title_case(cleaned), "name")
 
 
 # --------------------------------------------------------------------------- #
@@ -431,7 +561,7 @@ _OWNER_INDEX = _build_owner_index()
 
 def domains_for_entity(name: str) -> list[str]:
     """Curated domains attributed to ``name``, best candidate first."""
-    key = canonical_key(name)
+    key = merged_key(canonical_key(name))
     if not key:
         return []
     out = []
@@ -439,6 +569,28 @@ def domains_for_entity(name: str) -> list[str]:
     if home:
         out.append(home)
     out.extend(d for d in _OWNER_INDEX.get(key, ()) if d != home)
+    return out
+
+
+def _kb_domain_order(key: str, domains) -> list[str]:
+    """Candidate domains for an organisation, best first."""
+    usable = [d for d in domains if not is_shared_platform(d)]
+    return sorted(usable, key=lambda d: _domain_sort_key(key, d))
+
+
+def kb_domains(name: str) -> list[str]:
+    """Domains a reference table attributes to ``name``, best candidate first."""
+    key = merged_key(canonical_key(name))
+    if not key:
+        return []
+    out: list[str] = []
+    rec = _tracker_radar_names().get(key)
+    if rec is not None:
+        out.extend(_kb_domain_order(key, rec.domains))
+    vendor = _gvl_names().get(key)
+    if vendor is not None and vendor.domain and vendor.domain not in out:
+        if not is_shared_platform(vendor.domain):
+            out.append(vendor.domain)
     return out
 
 
@@ -470,7 +622,11 @@ def resolve_entity_domain(
     if curated:
         return curated[0], "entity_map" if key in ENTITY_HOME_DOMAINS else "domain_map"
     if resolved.domain and not is_shared_platform(resolved.domain):
-        return resolved.domain, "name_domain"
+        basis = {"tracker_radar": "tracker_radar", "tcf_gvl": "tcf_gvl"}.get(
+            resolved.basis, "name_domain")
+        return resolved.domain, basis
+    for domain in kb_domains(resolved.display):
+        return domain, "tracker_radar"
     if hints and key in hints:
         return hints[key], "observed"
     for prefix in name_prefixes(resolved.display):

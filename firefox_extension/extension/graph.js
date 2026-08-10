@@ -9,6 +9,7 @@ const NODE_COLOR = {
   generic: "#d8b4fe",
   domain: "#5b6478",
 };
+const UNGROUNDED_COLOR = "#7f8bab";
 const SOURCE_COLOR = {
   policy: "#6ee7b7",
   registry: "#f0b35b",
@@ -25,6 +26,16 @@ const TERMINATION_LABEL = {
   internal: "shares onward",
   terminal: "analysed",
   unexpanded: "not analysed",
+};
+const TRACK_LABEL = {
+  personal_data: "personal data",
+  inventory: "ad inventory",
+};
+const SUBJECT_LABEL = {
+  site_visitor: "this party's own visitors",
+  service_data: "data received from its customers",
+  not_applicable: "no personal data",
+  unknown: "population not stated",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -47,7 +58,13 @@ const state = {
   hovered: null,
   matches: new Set(),
   view: { x: 0, y: 0, k: 1 },
-  filters: { policy: true, registry: true, traffic: true, generic: true, domains: false },
+  track: "personal_data",
+  filters: {
+    policy: true, registry: true, traffic: true, generic: true, domains: false,
+    ungrounded: true,
+  },
+  editing: false,
+  mergeFrom: null,
 };
 
 // ---------------------------------------------------------------- model ---
@@ -64,13 +81,29 @@ function indexGraph(graph) {
   }
 }
 
+function edgeEvidence(edge) {
+  const evidence = edge.evidence || [];
+  if (state.track === "both") return evidence;
+  return evidence.filter((ev) => (ev.track || "personal_data") === state.track);
+}
+
 function edgeSources(edge) {
-  return new Set((edge.evidence || []).map((ev) => ev.source));
+  return new Set(edgeEvidence(edge).map((ev) => ev.source));
+}
+
+function edgeTracks(edge) {
+  return new Set((edge.evidence || []).map((ev) => ev.track || "personal_data"));
+}
+
+function edgeSubjects(edge) {
+  return new Set(edgeEvidence(edge).map((ev) => ev.subject).filter(Boolean));
 }
 
 function edgePasses(edge) {
   const f = state.filters;
-  const sources = edgeSources(edge);
+  const evidence = edgeEvidence(edge);
+  if (!evidence.length) return false;
+  const sources = new Set(evidence.map((ev) => ev.source));
   if (sources.size === 1 && sources.has("resolution")) return true;
   for (const s of sources) {
     if (s === "policy" && f.policy) return true;
@@ -83,6 +116,8 @@ function edgePasses(edge) {
 function nodePasses(node) {
   if (node.type === "generic" && !state.filters.generic) return false;
   if (node.type === "domain" && !state.filters.domains) return false;
+  if (node.type === "entity" && node.grounded === false
+      && !state.filters.ungrounded) return false;
   return true;
 }
 
@@ -347,7 +382,8 @@ function draw() {
     ctx.globalAlpha = dim && !match ? 0.18 : 1;
     ctx.beginPath();
     ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = NODE_COLOR[node.type] || "#9aa0b0";
+    ctx.fillStyle = (node.type === "entity" && node.grounded === false)
+      ? UNGROUNDED_COLOR : (NODE_COLOR[node.type] || "#9aa0b0");
     ctx.fill();
     if (terminationOf(id) === "unexpanded" && node.type !== "domain") {
       ctx.strokeStyle = "rgba(240,179,91,.75)";
@@ -502,8 +538,13 @@ function showTooltip(id, x, y) {
 function hideTooltip() { $("tooltip").hidden = true; }
 
 function select(id) {
+  if (state.editing && state.mergeFrom && id && id !== state.mergeFrom) {
+    completeMerge(id);
+    return;
+  }
   state.selected = id;
   renderDetail();
+  if (state.editing) renderEditBox();
   draw();
 }
 
@@ -511,7 +552,7 @@ function select(id) {
 function relationCard(edge, direction) {
   const otherId = direction === "out" ? edge.dst : edge.src;
   const other = state.byId.get(otherId);
-  const evidence = edge.evidence || [];
+  const evidence = edgeEvidence(edge);
   const negative = evidence.length > 0 && evidence.every((e) => e.negative);
 
   const card = document.createElement("div");
@@ -530,11 +571,17 @@ function relationCard(edge, direction) {
     + (dataTypes.length ? ` — ${dataTypes.slice(0, 4).join(", ")}` : "");
   card.append(what);
 
-  const sources = [...edgeSources(edge)];
-  if (sources.length) {
+  const parts = [...edgeSources(edge)];
+  for (const t of edgeTracks(edge)) {
+    if (state.track === "both" && TRACK_LABEL[t]) parts.push(TRACK_LABEL[t]);
+  }
+  for (const s of edgeSubjects(edge)) {
+    if (SUBJECT_LABEL[s]) parts.push(SUBJECT_LABEL[s]);
+  }
+  if (parts.length) {
     const src = document.createElement("div");
     src.className = "src";
-    src.textContent = sources.join(" · ");
+    src.textContent = parts.join(" · ");
     card.append(src);
   }
   const quote = evidence.find((e) => e.snippet);
@@ -544,8 +591,38 @@ function relationCard(edge, direction) {
     q.textContent = truncate(quote.snippet, 240);
     card.append(q);
   }
-  card.addEventListener("click", () => select(otherId));
+  if (state.editing) card.append(edgeEditRow(edge));
+  card.addEventListener("click", (ev) => {
+    if (ev.target.closest(".edit-row")) return;
+    if (state.mergeFrom) { completeMerge(otherId); return; }
+    select(otherId);
+  });
   return card;
+}
+
+function edgeEditRow(edge) {
+  const row = document.createElement("div");
+  row.className = "edit-row";
+  const drop = document.createElement("button");
+  drop.className = "mini danger";
+  drop.textContent = "remove";
+  drop.title = "Remove this arrangement from the graph";
+  drop.addEventListener("click", () => sendEdits([{
+    op: "delete_edge", kind: edge.kind, src: edge.src, dst: edge.dst,
+  }]));
+  row.append(drop);
+  for (const track of ["personal_data", "inventory"]) {
+    if (edgeTracks(edge).has(track) && edgeTracks(edge).size === 1) continue;
+    const move = document.createElement("button");
+    move.className = "mini";
+    move.textContent = `→ ${TRACK_LABEL[track]}`;
+    move.title = `Record this arrangement as ${TRACK_LABEL[track]}`;
+    move.addEventListener("click", () => sendEdits([{
+      op: "set_track", kind: edge.kind, src: edge.src, dst: edge.dst, track,
+    }]));
+    row.append(move);
+  }
+  return row;
 }
 
 function renderDetail() {
@@ -575,6 +652,10 @@ function renderDetail() {
     [`hop ${node.hop_first_seen ?? "?"}`, ""],
     [TERMINATION_LABEL[termination], termination],
     ...(node.primary_domain ? [[node.primary_domain, ""]] : []),
+    ...(node.country ? [[node.country.toUpperCase(), ""]] : []),
+    ...(node.type === "entity" && node.grounded === false
+      ? [["no register knows this name", "unexpanded"]] : []),
+    ...(node.edited ? [["corrected by hand", ""]] : []),
   ]) {
     const chip = document.createElement("span");
     chip.className = "chip " + cls;
@@ -622,12 +703,96 @@ function renderDetail() {
   }
 }
 
+function renderEditBox() {
+  const box = $("edit-box");
+  box.hidden = !state.editing;
+  $("edit-toggle").classList.toggle("primary", state.editing);
+  if (!state.editing) { state.mergeFrom = null; return; }
+
+  const actions = $("edit-actions");
+  actions.innerHTML = "";
+  const node = state.selected && state.byId.get(state.selected);
+  if (!node) {
+    $("edit-status").textContent = "Select a party to correct it.";
+    return;
+  }
+  if (state.mergeFrom) {
+    const from = state.byId.get(state.mergeFrom);
+    $("edit-status").textContent =
+      `Folding ${(from && from.display_name) || state.mergeFrom} into the next `
+      + "party you click. Press Escape to stop.";
+  } else {
+    $("edit-status").textContent = `Editing ${node.display_name || node.id}.`;
+  }
+
+  const rename = document.createElement("button");
+  rename.className = "mini";
+  rename.textContent = "rename";
+  rename.addEventListener("click", () => {
+    const next = prompt("Name for this party", node.display_name || node.id);
+    if (next && next.trim() && next !== node.display_name) {
+      sendEdits([{ op: "rename", node: node.id, display_name: next.trim() }]);
+    }
+  });
+
+  const merge = document.createElement("button");
+  merge.className = "mini";
+  merge.textContent = state.mergeFrom ? "cancel merge" : "fold into…";
+  merge.addEventListener("click", () => {
+    state.mergeFrom = state.mergeFrom ? null : node.id;
+    renderEditBox();
+  });
+
+  const drop = document.createElement("button");
+  drop.className = "mini danger";
+  drop.textContent = "remove party";
+  drop.addEventListener("click", () => {
+    sendEdits([{ op: "delete_node", node: node.id }]);
+    state.selected = null;
+  });
+
+  actions.append(rename, merge, drop);
+}
+
+function completeMerge(intoId) {
+  const from = state.mergeFrom;
+  state.mergeFrom = null;
+  if (!from || from === intoId) { renderEditBox(); return; }
+  sendEdits([{ op: "merge", node: from, into: intoId }]);
+  state.selected = intoId;
+}
+
+async function sendEdits(edits) {
+  if (!state.jobId) {
+    $("edit-status").textContent = "Corrections need a collected walk.";
+    return;
+  }
+  try {
+    const resp = await fetch(`${BRIDGE}/graph/edit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: state.jobId, edits }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    $("edit-status").textContent = data.applied
+      ? `${data.applied} correction(s) applied.`
+      : "Nothing changed.";
+  } catch (err) {
+    $("edit-status").textContent = `Correction failed: ${err.message}`;
+    return;
+  }
+  await poll(false);
+  renderEditBox();
+}
+
 function renderLegend() {
   const legend = $("legend");
   legend.innerHTML = "";
   const rows = [
     ["#6ea8fe", "this site", ""],
     ["#9ec5ff", "named organisation", ""],
+    [UNGROUNDED_COLOR, "named, but no register knows it", ""],
     ["#d8b4fe", "unnamed category", ""],
     [SOURCE_COLOR.policy, "stated in a policy", ""],
     [SOURCE_COLOR.registry, "named in a registry", ""],
@@ -645,15 +810,24 @@ function renderLegend() {
   }
 }
 
-function countChains(parties = 4, limit = 400) {
+function carriesUpstreamData(subjects) {
+  if (!subjects.size) return true;
+  if (subjects.has("service_data") || subjects.has("not_applicable")) return true;
+  return subjects.has("unknown");
+}
+
+function countChainsOnTrack(track, parties, limit) {
   const adjacency = new Map();
   const owners = new Map();
   for (const e of state.graph.edges) {
     if (e.kind === "owned_by") owners.set(e.src, e.dst);
   }
   for (const e of state.graph.edges) {
-    const positive = (e.evidence || []).filter((ev) => !ev.negative);
-    if (!positive.length || !edgePasses(e)) continue;
+    if (!edgePasses(e)) continue;
+    const positive = (e.evidence || []).filter(
+      (ev) => !ev.negative && (ev.track || "personal_data") === track,
+    );
+    if (!positive.length) continue;
     let src = e.src;
     let dst = e.dst;
     if (e.kind === "contacts") dst = owners.get(e.dst) || "";
@@ -664,16 +838,17 @@ function countChains(parties = 4, limit = 400) {
     if (!node || !from) continue;
     if (!["entity", "target"].includes(node.type)) continue;
     if (!["entity", "target"].includes(from.type)) continue;
-    if (!adjacency.has(src)) adjacency.set(src, new Set());
-    adjacency.get(src).add(dst);
+    if (!adjacency.has(src)) adjacency.set(src, new Map());
+    adjacency.get(src).set(dst, new Set(positive.map((ev) => ev.subject).filter(Boolean)));
   }
   let found = 0;
   let steps = 60000;
   const walk = (path) => {
     if (found >= limit || steps-- <= 0) return;
     if (path.length === parties) { found++; return; }
-    for (const next of adjacency.get(path[path.length - 1]) || []) {
+    for (const [next, subjects] of adjacency.get(path[path.length - 1]) || []) {
       if (path.includes(next)) continue;
+      if (path.length > 1 && !carriesUpstreamData(subjects)) continue;
       walk(path.concat(next));
     }
   };
@@ -682,6 +857,12 @@ function countChains(parties = 4, limit = 400) {
     walk([start]);
   }
   return found;
+}
+
+function countChains(parties = 4, limit = 400) {
+  const tracks = state.track === "both"
+    ? ["personal_data", "inventory"] : [state.track];
+  return tracks.reduce((n, t) => n + countChainsOnTrack(t, parties, limit), 0);
 }
 
 let lastSnapshot = null;
@@ -699,6 +880,9 @@ function renderStats(snapshot) {
   ).length;
   $("stat-nodes").textContent = parties;
   $("stat-edges").textContent = arrangements;
+  $("stat-edges-label").textContent = state.track === "both"
+    ? "arrangements (both tracks)"
+    : `${TRACK_LABEL[state.track]} arrangements`;
   $("stat-crawled").textContent = (snapshot && snapshot.progress.crawled) || 0;
   $("stat-chains").textContent = countChains();
 
@@ -866,6 +1050,7 @@ $("search").addEventListener("keydown", (ev) => {
 for (const [id, key] of [
   ["f-policy", "policy"], ["f-registry", "registry"], ["f-traffic", "traffic"],
   ["f-generic", "generic"], ["f-domains", "domains"],
+  ["f-ungrounded", "ungrounded"],
 ]) {
   $(id).addEventListener("change", (ev) => {
     state.filters[key] = ev.target.checked;
@@ -879,6 +1064,25 @@ $("hops").addEventListener("click", (ev) => {
   if (!button) return;
   state.hops = Number(button.dataset.hops);
   for (const b of $("hops").querySelectorAll("button")) b.classList.toggle("on", b === button);
+});
+$("track").addEventListener("click", (ev) => {
+  const button = ev.target.closest("button");
+  if (!button) return;
+  state.track = button.dataset.track;
+  for (const b of $("track").querySelectorAll("button")) b.classList.toggle("on", b === button);
+  rebuild(false);
+  renderStats(lastSnapshot);
+});
+$("edit-toggle").addEventListener("click", () => {
+  state.editing = !state.editing;
+  renderEditBox();
+  renderDetail();
+});
+window.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && state.mergeFrom) {
+    state.mergeFrom = null;
+    renderEditBox();
+  }
 });
 $("run").addEventListener("click", start);
 $("stop").addEventListener("click", stop);
@@ -894,5 +1098,6 @@ $("stop").addEventListener("click", stop);
   $("run").disabled = !state.origin;
   renderLegend();
   renderDetail();
+  renderEditBox();
   resize();
 })();

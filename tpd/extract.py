@@ -62,6 +62,9 @@ _MAX_SEG_CHARS = 400
 # Table cells shorter than this can't carry a subject-verb-object disclosure.
 _MIN_CELL_WORDS = 3
 
+# Ceiling on a declared rowspan/colspan.
+_MAX_SPAN = 100
+
 # Check whether the table (likely) names the entity in each row.
 _VENDOR_COL_RE = re.compile(
     r"\b(vendors?|compan(?:y|ies)|organi[sz]ations?|providers?|sub[- ]?processors?|"
@@ -158,19 +161,90 @@ def _clean(s: str) -> str:
     return s.strip()
 
 
+def _span(cell, attr: str) -> int:
+    """A cell's row or column span, bounded against a malformed attribute."""
+    try:
+        return max(1, min(_MAX_SPAN, int(cell.get(attr, 1))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _table_grid(tbl, value=None) -> list[list]:
+    if value is None:
+        def value(cell):
+            return _clean(cell.get_text(" "))
+
+    grid: list[list] = []
+    carried: dict[int, list] = {}     # column -> [rows still owed, value]
+    for tr in tbl.find_all("tr"):
+        cells = tr.find_all(["td", "th"])
+        row: list = []
+        col = idx = 0
+        while idx < len(cells) or col in carried:
+            held = carried.get(col)
+            if held is not None:
+                row.append(held[1])
+                held[0] -= 1
+                if held[0] <= 0:
+                    del carried[col]
+                col += 1
+                continue
+            if idx >= len(cells):
+                break
+            cell = cells[idx]
+            idx += 1
+            read = value(cell)
+            rowspan = _span(cell, "rowspan")
+            for _ in range(_span(cell, "colspan")):
+                row.append(read)
+                if rowspan > 1:
+                    carried[col] = [rowspan - 1, read]
+                col += 1
+        grid.append(row)
+    return grid
+
+
+def table_cell_grid(tbl) -> list[list]:
+    return _table_grid(tbl, value=lambda cell: cell)
+
+
+def cell_parties(tag) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+
+    def flush() -> None:
+        text = _clean(" ".join(buf))
+        if text:
+            parts.append(text)
+        buf.clear()
+
+    def walk(node) -> None:
+        for child in node.children:
+            if type(child) in (NavigableString, CData):
+                buf.append(str(child))
+            elif isinstance(child, Tag):
+                if child.name == "br":
+                    flush()
+                elif child.name == "a":
+                    flush()
+                    buf.append(child.get_text(" "))
+                    flush()
+                else:
+                    walk(child)
+
+    walk(tag)
+    flush()
+    return parts
+
+
 def _table_headers_and_rows(tbl) -> tuple[list[str], list[list[str]]]:
     """Split an HTML <table> tag into its (raw, un-lower-cased) header cells and
     cleaned body rows. Shared by every table-walking consumer so the tr/td/th
     traversal and cell cleaning live in exactly one place."""
-    rows = tbl.find_all("tr")
-    if not rows:
+    grid = _table_grid(tbl)
+    if not grid:
         return [], []
-    header_row = [_clean(c.get_text(" ")) for c in rows[0].find_all(["td", "th"])]
-    body = [
-        [_clean(c.get_text(" ")) for c in r.find_all(["td", "th"])]
-        for r in rows[1:]
-    ]
-    return header_row, body
+    return grid[0], grid[1:]
 
 
 def _build_table(tbl) -> Optional[Table]:
@@ -481,12 +555,7 @@ class DocTree:
                 anc = node.ancestors()
                 out.append(Sentence(node.text, node, 0))
                 if anc:
-                    p = anc[0]
-                    joined = _join(p.text, node.text)
-                    out.append(Sentence(joined, node, 1))
-                if len(anc) >= 2:
-                    joined = _join(anc[1].text, _join(anc[0].text, node.text))
-                    out.append(Sentence(joined, node, 2))
+                    out.append(Sentence(_join(anc[0].text, node.text), node, 1))
             elif node.type is NodeType.TABLE and node.table is not None:
                 for row in node.table.rows:
                     for cell in row:

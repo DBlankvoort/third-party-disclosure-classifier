@@ -9,6 +9,7 @@ from tpd.classify.run import classify_corpus
 from tpd.collect.base import Corpus
 from tpd.collect.runner import usable_target_ids
 from tpd.entities import load_entity_domains
+from tpd.tracks import PERSONAL_DATA
 
 from . import (
     APP_TARGET_TYPES,
@@ -121,11 +122,13 @@ def label(corpus_root, out_dir, no_ner, workers, include_unusable, order_seed, m
         prior_chains = Path(merge_dir) / "chain_labels.csv" if merge_dir else None
         if prior_chains and not prior_chains.exists():
             prior_chains = None
-        found = sharing_chains(g, parties=CHAIN_PARTIES)
+        found = sharing_chains(g, parties=CHAIN_PARTIES, track=PERSONAL_DATA)
         n5 = write_chain_sheet(found, g, chains_path, order_seed=seed,
                                prior_path=prior_chains)
-        click.echo(f"wrote {n5} chain rows -> {chains_path} "
-                   f"({CHAIN_PARTIES} parties per chain)")
+        stated = sum(1 for c in found if c.subject_stated)
+        click.echo(f"wrote {n5} personal-data chain rows -> {chains_path} "
+                   f"({CHAIN_PARTIES} parties per chain; {stated} state whose "
+                   f"data every onward hop covers)")
 
         res_path = Path(out_dir) / "entity_resolution.csv"
         prior_res = Path(merge_dir) / "entity_resolution.csv" if merge_dir else None
@@ -250,7 +253,8 @@ def score(corpus_root, relevance_gold, typology_gold, pp_presence_gold, list_pre
             gold_chains = load_chain_gold(chain_gold)
             if gold_chains:
                 click.echo(chain_verification(
-                    sharing_chains(g, parties=CHAIN_PARTIES), gold_chains).summary)
+                    sharing_chains(g, parties=CHAIN_PARTIES,
+                                   track=PERSONAL_DATA), gold_chains).summary)
             else:
                 click.echo("No filled gold_verified rows found.")
 
@@ -267,6 +271,50 @@ def annotate(corpus_root, labels_dir, host, port) -> None:
     from .annotate import run_server
 
     run_server(corpus_root, labels_dir, host=host, port=port)
+
+
+# --------------------------------------------------------------------------- #
+@cli.command(name="findings")
+@click.option("--graph", "graph_path", required=True, help="graph JSON to read")
+@click.option("--corpus", "corpus_root", default=None,
+              help="corpus the graph was walked from, for the opacity measures")
+@click.option("--out", "out_path", required=True, help="HTML page to write")
+@click.option("--origin", default="", help="the seed the walk started from")
+@click.option("--title", default=None, help="page title")
+@click.option("--no-ner", is_flag=True)
+@click.option("--no-classify", is_flag=True,
+              help="skip the typology pass, leaving the specificity section absent")
+@click.option("--workers", type=int, default=8, show_default=True)
+@click.option("--include-unusable", is_flag=True)
+def findings_cmd(graph_path, corpus_root, out_path, origin, title, no_ner,
+                 no_classify, workers, include_unusable) -> None:
+    """Measure a walk and write the findings page it supports."""
+    from tpd.sharing_graph import SharingGraph
+
+    from .findings import measure, write_findings
+
+    graph = SharingGraph.load(graph_path)
+    corpus = Corpus(corpus_root) if corpus_root else None
+    ids = _scored_ids(corpus, include_unusable) if corpus else None
+
+    result = None
+    if corpus is not None and not no_classify:
+        click.echo("classifying the corpus for the specificity distribution ...")
+        result = classify_corpus(corpus, use_ner=not no_ner,
+                                 target_ids=list(ids) if ids else None,
+                                 workers=workers)
+
+    def _progress(i, n, tid):
+        if i % 10 == 0 or i == n:
+            click.echo(f"  measured {i}/{n} document sets ({tid})")
+
+    measurements = measure(
+        graph, corpus=corpus, classify_result=result, origin=origin,
+        target_ids=ids, use_ner=not no_ner, progress=_progress,
+    )
+    page, data = write_findings(measurements, out_path, title=title)
+    click.echo(f"wrote {page}")
+    click.echo(f"wrote {data}")
 
 
 if __name__ == "__main__":

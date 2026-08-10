@@ -5,6 +5,8 @@ from __future__ import annotations
 from .classify.named_entities import _is_first_party
 from .classify.structured_relations import DOWNSTREAM, purposes_from_tcf
 from .entities import resolve_name
+from .kb import gvl
+from .tracks import PERSONAL_DATA, SITE_VISITOR
 
 # What a consent dialog's vendor list establishes about a party.
 _DATA_TYPE = "cookie / device identifiers"
@@ -31,6 +33,12 @@ def _clean_vendor(entry) -> tuple[str, list[int]]:
     if isinstance(ids, dict):  # {"1": true, "3": true}
         ids = [int(k) for k, v in ids.items() if v and str(k).isdigit()]
     ids = [i for i in ids if isinstance(i, int)]
+
+    vendor_id = entry.get("id")
+    registered = gvl.by_id().get(vendor_id) if isinstance(vendor_id, int) else None
+    if registered is not None:
+        name = name or registered.name
+        ids = ids or list(registered.all_purposes)
     return name, ids
 
 
@@ -80,6 +88,9 @@ def cmp_relations(payload: dict | None, first_party: set[str] | None = None) -> 
             "action": "be_shared",
             "negative": False,
             "direction": DOWNSTREAM,
+            "track": PERSONAL_DATA,
+            "subject": SITE_VISITOR,
+            "grounded": True,
             "purposes": rec["purposes"],
             "examples": [],
             "qualifier": source,

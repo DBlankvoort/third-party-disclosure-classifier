@@ -33,8 +33,9 @@ ENTITY_RESOLUTION_FIELDS = [
     "gold_domain", "notes",
 ]
 CHAIN_FIELDS = [
-    "label_order", "chain_id", "parties", "hop_kinds", "hop_sources",
-    "hop_data_types", "evidence", "traffic_only_hops", "gold_verified", "notes",
+    "label_order", "chain_id", "track", "parties", "hop_kinds", "hop_sources",
+    "hop_data_types", "hop_subjects", "evidence", "traffic_only_hops",
+    "unstated_subject_hops", "gold_verified", "notes",
 ]
 COVERAGE_FIELDS = [
     "label_order", "target_id", "entity", "arrangement_id", "detected",
@@ -382,14 +383,17 @@ def write_chain_sheet(chains, graph, path: str | Path,
             w.writerow({
                 "label_order": order,
                 "chain_id": chain.id,
+                "track": chain.track,
                 "parties": " -> ".join(label(p) for p in chain.parties),
                 "hop_kinds": ";".join(h.kind for h in chain.hops),
                 "hop_sources": ";".join(",".join(h.sources) for h in chain.hops),
                 "hop_data_types": ";".join(
                     ",".join(h.data_types) for h in chain.hops
                 ),
+                "hop_subjects": ";".join(h.subject for h in chain.hops),
                 "evidence": evidence,
                 "traffic_only_hops": chain.traffic_only_hops,
+                "unstated_subject_hops": chain.unstated_subject_hops,
                 "gold_verified": gold,
                 "notes": notes,
             })

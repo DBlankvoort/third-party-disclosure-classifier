@@ -126,26 +126,39 @@ class PoliGrapher:
                 key = coref[key]
             return key
 
+        memo: dict[tuple[PhraseLabel, str], str] = {}
         out: dict[str, str] = {}
-        for key, phrase in pg.phrases.items():
-            target = resolve(key)
-            tphrase = pg.phrases[target]
-            if tphrase.label == PhraseLabel.DATA:
-                out[key] = self.normalizer.normalize_data(tphrase.text)
-            elif tphrase.label == PhraseLabel.ENTITY:
-                out[key] = self.normalizer.normalize_entity(tphrase.text)
-            else:
+        for key in pg.phrases:
+            tphrase = pg.phrases[resolve(key)]
+            if tphrase.label not in (PhraseLabel.DATA, PhraseLabel.ENTITY):
                 out[key] = None
+                continue
+            cache_key = (tphrase.label, tphrase.text)
+            if cache_key not in memo:
+                memo[cache_key] = (
+                    self.normalizer.normalize_data(tphrase.text)
+                    if tphrase.label == PhraseLabel.DATA
+                    else self.normalizer.normalize_entity(tphrase.text)
+                )
+            out[key] = memo[cache_key]
         return out
 
 _LEMMA_FIXUPS = {"datum": "data", "medium": "media"}
 
+_LEMMATIZER_DISABLED = ("parser", "ner")
+
 
 def _make_lemmatizer(nlp: NLP):
+    disable = [p for p in _LEMMATIZER_DISABLED if p in nlp.nlp.pipe_names]
+    cache: dict[str, str] = {}
+
     def _lem(text: str) -> str:
+        hit = cache.get(text)
+        if hit is not None:
+            return hit
         try:
             out = []
-            for t in nlp.nlp(text):
+            for t in nlp.nlp(text, disable=disable):
                 if t.is_punct or t.is_space:
                     continue
                 if t.pos_ == "PROPN" or (
@@ -156,7 +169,9 @@ def _make_lemmatizer(nlp: NLP):
                     continue
                 lemma = t.lemma_.lower()
                 out.append(_LEMMA_FIXUPS.get(lemma, lemma))
-            return " ".join(out)
+            result = " ".join(out)
         except Exception:
-            return text
+            result = text
+        cache[text] = result
+        return result
     return _lem

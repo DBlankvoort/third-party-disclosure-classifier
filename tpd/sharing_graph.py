@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
-from .entities import is_shared_platform, resolve_name
+from .entities import (
+    country_for,
+    is_investor_parent,
+    is_shared_platform,
+    resolve_name,
+    tcf_vendor,
+)
+from .tracks import (
+    PERSONAL_DATA,
+    SITE_VISITOR,
+    TRACKS,
+    UNKNOWN,
+    carries_upstream_data,
+    track_for_sources,
+)
 
 
 class NodeType(str, Enum):
@@ -33,6 +47,7 @@ class EvidenceSource(str, Enum):
 
 
 GENERIC_PREFIX = "generic::"
+TARGET_PREFIX = "target::"
 
 
 def generic_node_id(category: str) -> str:
@@ -43,7 +58,8 @@ def entity_node_id(name: str) -> str:
     return f"entity::{resolve_name(name).key or name.strip().lower()}"
 
 
-def entity_node(name: str, hop: int = 0) -> Node:
+def entity_node(name: str, hop: int = 0, grounded: bool | None = None,
+                confidence: float = 0.0) -> Node:
     """The node one organisation name stands for."""
     resolved = resolve_name(name)
     surface = name.strip()
@@ -53,7 +69,13 @@ def entity_node(name: str, hop: int = 0) -> Node:
         display_name=resolved.display or surface,
         resolution_basis=resolved.basis,
         hop_first_seen=hop,
+        country=resolved.country or country_for(resolved.display),
+        grounded=resolved.grounded if grounded is None else bool(grounded),
+        confidence=confidence,
     )
+    registered = tcf_vendor(resolved.display)
+    if registered is not None:
+        node.tcf_vendor_id = registered.id
     if surface and surface.lower() != node.display_name.lower():
         node.aliases = [surface]
     # A name written as a domain states where the party publishes.
@@ -68,7 +90,7 @@ def domain_node_id(domain: str) -> str:
 
 
 def target_node_id(target_id: str) -> str:
-    return f"target::{target_id}"
+    return f"{TARGET_PREFIX}{target_id}"
 
 
 def _now() -> str:
@@ -92,6 +114,16 @@ class Node:
     hop_first_seen: int | None = None
     # Whether the node has been analysed in its own right.
     expanded: bool = False
+    # ISO-3166 alpha-2 headquarters country, where a reference table records one.
+    country: str = ""
+    # Whether a record outside the document naming the party recognises it.
+    grounded: bool = True
+    # The strongest reading behind the name, where one was measured.
+    confidence: float = 0.0
+    # The party's registration in the IAB TCF Global Vendor List.
+    tcf_vendor_id: int = 0
+    # Corrections applied by hand through the graph editor.
+    edited: bool = False
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -100,7 +132,8 @@ class Node:
 
     @classmethod
     def from_dict(cls, d: dict) -> Node:
-        d = dict(d)
+        known = {f.name for f in fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         d["type"] = NodeType(d["type"])
         return cls(**d)
 
@@ -115,6 +148,12 @@ class Evidence:
     data_type: str = ""
     purposes: list[str] = field(default_factory=list)
     negative: bool = False
+    # Whether the arrangement concerns advertising inventory or personal data.
+    track: str = PERSONAL_DATA
+    # Whose data the arrangement concerns.
+    subject: str = UNKNOWN
+    # How strongly the reading that produced the relation was supported.
+    confidence: float = 0.0
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -123,7 +162,8 @@ class Evidence:
 
     @classmethod
     def from_dict(cls, d: dict) -> Evidence:
-        d = dict(d)
+        known = {f.name for f in fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         d["source"] = EvidenceSource(d["source"])
         return cls(**d)
 
@@ -142,6 +182,18 @@ class Edge:
     @property
     def sources(self) -> set[str]:
         return {e.source.value for e in self.evidence}
+
+    @property
+    def tracks(self) -> set[str]:
+        """The tracks this edge's evidence speaks to."""
+        return {e.track for e in self.evidence}
+
+    def evidence_on(self, track: str | None = None, positive: bool = True) -> list[Evidence]:
+        """This edge's evidence, restricted to one track."""
+        return [
+            e for e in self.evidence
+            if (track is None or e.track == track) and (not positive or not e.negative)
+        ]
 
     def to_dict(self) -> dict:
         return {
@@ -163,6 +215,8 @@ class SharingGraph:
     def __init__(self) -> None:
         self.nodes: dict[str, Node] = {}
         self.edges: dict[tuple[str, str, str], Edge] = {}
+        self._out: dict[str, list[Edge]] = {}
+        self._in: dict[str, list[Edge]] = {}
 
     # ------------------------------------------------------------- mutation
     def add_node(self, node: Node) -> Node:
@@ -183,6 +237,9 @@ class SharingGraph:
         existing.resolution_basis = existing.resolution_basis or node.resolution_basis
         existing.target_type = existing.target_type or node.target_type
         existing.expanded = existing.expanded or node.expanded
+        existing.country = existing.country or node.country
+        existing.grounded = existing.grounded or node.grounded
+        existing.confidence = max(existing.confidence, node.confidence)
         if node.hop_first_seen is not None:
             existing.hop_first_seen = (
                 node.hop_first_seen if existing.hop_first_seen is None
@@ -196,17 +253,114 @@ class SharingGraph:
         edge = self.edges.get(key)
         if edge is None:
             edge = Edge(kind=kind, src=src, dst=dst)
-            self.edges[key] = edge
+            self._index(edge)
         if evidence is not None:
             edge.evidence.append(evidence)
         return edge
 
+    def _index(self, edge: Edge) -> None:
+        self.edges[edge.key] = edge
+        self._out.setdefault(edge.src, []).append(edge)
+        self._in.setdefault(edge.dst, []).append(edge)
+
+    def _unindex(self, edge: Edge) -> None:
+        self.edges.pop(edge.key, None)
+        for side, nid in ((self._out, edge.src), (self._in, edge.dst)):
+            held = side.get(nid)
+            if held is None:
+                continue
+            side[nid] = [e for e in held if e is not edge]
+            if not side[nid]:
+                del side[nid]
+
+    def remove_edge(self, kind: str, src: str, dst: str) -> bool:
+        edge = self.edges.get((kind, src, dst))
+        if edge is None:
+            return False
+        self._unindex(edge)
+        return True
+
+    def remove_node(self, node_id: str) -> bool:
+        if node_id not in self.nodes:
+            return False
+        for edge in list(self.out_edges(node_id)) + list(self.in_edges(node_id)):
+            self._unindex(edge)
+        del self.nodes[node_id]
+        return True
+
+    def rename_node(self, node_id: str, display_name: str) -> bool:
+        node = self.nodes.get(node_id)
+        if node is None or not display_name.strip():
+            return False
+        previous = node.display_name
+        node.display_name = display_name.strip()
+        node.edited = True
+        if previous and previous.lower() not in {a.lower() for a in node.aliases}:
+            node.aliases.append(previous)
+        return True
+
+    def merge_nodes(self, node_id: str, into_id: str) -> bool:
+        """Fold one node's edges and surfaces into another."""
+        node = self.nodes.get(node_id)
+        target = self.nodes.get(into_id)
+        if node is None or target is None or node_id == into_id:
+            return False
+        for edge in list(self.out_edges(node_id)) + list(self.in_edges(node_id)):
+            self._unindex(edge)
+            src = into_id if edge.src == node_id else edge.src
+            dst = into_id if edge.dst == node_id else edge.dst
+            if src == dst:
+                continue
+            held = self.edges.get((edge.kind.value, src, dst))
+            if held is None:
+                self._index(Edge(kind=edge.kind, src=src, dst=dst,
+                                 evidence=list(edge.evidence)))
+            else:
+                held.evidence.extend(edge.evidence)
+        surfaces = [node.display_name, *node.aliases]
+        seen = {a.lower() for a in target.aliases} | {target.display_name.lower()}
+        for s in surfaces:
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                target.aliases.append(s)
+        target.primary_domain = target.primary_domain or node.primary_domain
+        target.country = target.country or node.country
+        target.grounded = target.grounded or node.grounded
+        target.edited = True
+        del self.nodes[node_id]
+        return True
+
+    def set_edge_track(self, kind: str, src: str, dst: str, track: str) -> bool:
+        edge = self.edges.get((kind, src, dst))
+        if edge is None or track not in TRACKS:
+            return False
+        for ev in edge.evidence:
+            ev.track = track
+        return True
+
+    def apply_edit(self, edit: dict) -> bool:
+        """Apply one correction, returning whether it changed the graph."""
+        op = (edit or {}).get("op")
+        if op == "rename":
+            return self.rename_node(edit.get("node", ""), edit.get("display_name", ""))
+        if op == "merge":
+            return self.merge_nodes(edit.get("node", ""), edit.get("into", ""))
+        if op == "delete_node":
+            return self.remove_node(edit.get("node", ""))
+        if op == "delete_edge":
+            return self.remove_edge(edit.get("kind", ""), edit.get("src", ""),
+                                    edit.get("dst", ""))
+        if op == "set_track":
+            return self.set_edge_track(edit.get("kind", ""), edit.get("src", ""),
+                                       edit.get("dst", ""), edit.get("track", ""))
+        return False
+
     # ------------------------------------------------------------ traversal
     def out_edges(self, node_id: str) -> list[Edge]:
-        return [e for e in self.edges.values() if e.src == node_id]
+        return self._out.get(node_id, [])
 
     def in_edges(self, node_id: str) -> list[Edge]:
-        return [e for e in self.edges.values() if e.dst == node_id]
+        return self._in.get(node_id, [])
 
     def downstream(self, node_id: str, hops: int = 1) -> dict[int, set[str]]:
         """Nodes reachable from ``node_id``, keyed by hop distance."""
@@ -264,6 +418,31 @@ class SharingGraph:
             return "internal"
         return "terminal" if node.expanded else "unexpanded"
 
+    # ------------------------------------------------------------- tracks
+    def edge_counts(self) -> dict[str, int]:
+        """Edges per track. No single total answers for both."""
+        counts = {t: 0 for t in TRACKS}
+        for edge in self.edges.values():
+            for track in edge.tracks:
+                if track in counts:
+                    counts[track] += 1
+        return counts
+
+    def subgraph(self, track: str, prune: bool = True) -> SharingGraph:
+        out = SharingGraph()
+        for edge in self.edges.values():
+            kept = [e for e in edge.evidence if e.track == track]
+            if not kept:
+                continue
+            out._index(Edge(kind=edge.kind, src=edge.src, dst=edge.dst,
+                            evidence=kept))
+        for nid, node in self.nodes.items():
+            if prune and not (out._out.get(nid) or out._in.get(nid)) \
+                    and node.type is not NodeType.TARGET:
+                continue
+            out.nodes[nid] = Node.from_dict(node.to_dict())
+        return out
+
     # ------------------------------------------------------- serialisation
     def to_dict(self) -> dict:
         return {
@@ -278,14 +457,32 @@ class SharingGraph:
             node = Node.from_dict(nd)
             g.nodes[node.id] = node
         for ed in d.get("edges", []):
-            edge = Edge.from_dict(ed)
-            g.edges[edge.key] = edge
+            g._index(Edge.from_dict(ed))
         return g
 
-    def save(self, path: str | Path) -> None:
+    def save(self, path: str | Path, track: str | None = None) -> None:
+        graph = self.subgraph(track) if track else self
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self.to_dict(), indent=1), encoding="utf-8")
+        with p.open("w", encoding="utf-8") as f:
+            f.write('{\n "nodes": [\n')
+            for i, node in enumerate(graph.nodes.values()):
+                f.write("  " if i == 0 else ",\n  ")
+                json.dump(node.to_dict(), f)
+            f.write("\n ],\n \"edges\": [\n")
+            for i, edge in enumerate(graph.edges.values()):
+                f.write("  " if i == 0 else ",\n  ")
+                json.dump(edge.to_dict(), f)
+            f.write("\n ]\n}\n")
+
+    def save_by_track(self, path: str | Path) -> dict[str, Path]:
+        p = Path(path)
+        out: dict[str, Path] = {}
+        for track in TRACKS:
+            target = p.with_name(f"{p.stem}.{track}{p.suffix or '.json'}")
+            self.save(target, track=track)
+            out[track] = target
+        return out
 
     @classmethod
     def load(cls, path: str | Path) -> SharingGraph:
@@ -305,10 +502,22 @@ class ChainHop:
     sources: list[str] = field(default_factory=list)
     data_types: list[str] = field(default_factory=list)
     via_domain: str = ""
+    track: str = PERSONAL_DATA
+    subjects: list[str] = field(default_factory=list)
 
     @property
     def traffic_only(self) -> bool:
         return set(self.sources) == {EvidenceSource.TRAFFIC.value}
+
+    @property
+    def subject(self) -> str:
+        """The widest population this hop's evidence covers."""
+        from .tracks import SERVICE_DATA, SITE_VISITOR
+
+        for candidate in (SERVICE_DATA, SITE_VISITOR):
+            if candidate in self.subjects:
+                return candidate
+        return self.subjects[0] if self.subjects else UNKNOWN
 
 
 @dataclass
@@ -327,21 +536,37 @@ class SharingChain:
         return {s for h in self.hops for s in h.sources}
 
     @property
+    def track(self) -> str:
+        """The single track every hop of the chain belongs to."""
+        tracks = {h.track for h in self.hops}
+        return tracks.pop() if len(tracks) == 1 else ""
+
+    @property
     def traffic_only_hops(self) -> int:
         return sum(1 for h in self.hops if h.traffic_only)
+
+    @property
+    def unstated_subject_hops(self) -> int:
+        """Continuation hops whose document did not state whose data it covers."""
+        return sum(1 for h in self.hops[1:] if h.subject in ("", UNKNOWN))
 
     @property
     def fully_disclosed(self) -> bool:
         """Whether every hop rests on a written disclosure."""
         return self.traffic_only_hops == 0
 
+    @property
+    def subject_stated(self) -> bool:
+        """Whether every continuation hop states the population it covers."""
+        return self.unstated_subject_hops == 0
+
 
 def _positive_evidence(edge: Edge) -> list[Evidence]:
     return [e for e in edge.evidence if not e.negative]
 
 
-def flow_hops(graph: SharingGraph) -> dict[str, list[ChainHop]]:
-    """Adjacency of party-to-party data flow."""
+def flow_hops(graph: SharingGraph, track: str | None = None) -> dict[str, list[ChainHop]]:
+    """Adjacency of party-to-party data flow"""
     owners: dict[str, str] = {}
     for edge in graph.edges.values():
         if edge.kind is EdgeKind.OWNED_BY:
@@ -349,7 +574,10 @@ def flow_hops(graph: SharingGraph) -> dict[str, list[ChainHop]]:
 
     out: dict[str, list[ChainHop]] = {}
     for edge in graph.edges.values():
-        positive = _positive_evidence(edge)
+        positive = [
+            e for e in _positive_evidence(edge)
+            if track is None or e.track == track
+        ]
         if not positive:
             continue
         if edge.kind in (EdgeKind.DISCLOSES_SHARING_WITH, EdgeKind.SUPPLIES):
@@ -363,27 +591,54 @@ def flow_hops(graph: SharingGraph) -> dict[str, list[ChainHop]]:
             continue
         if src == dst:
             continue
-        out.setdefault(src, []).append(ChainHop(
-            src=src, dst=dst, kind=edge.kind.value,
-            sources=sorted({e.source.value for e in positive}),
-            data_types=sorted({e.data_type for e in positive if e.data_type}),
-            via_domain=via,
-        ))
+        for hop_track in sorted({e.track for e in positive}):
+            evidence = [e for e in positive if e.track == hop_track]
+            out.setdefault(src, []).append(ChainHop(
+                src=src, dst=dst, kind=edge.kind.value,
+                sources=sorted({e.source.value for e in evidence}),
+                data_types=sorted({e.data_type for e in evidence if e.data_type}),
+                via_domain=via,
+                track=hop_track,
+                subjects=sorted({e.subject for e in evidence if e.subject}),
+            ))
     return out
 
 
+# Share of the budget the analysed targets keep between them.
+TARGET_BUDGET_SHARE = 0.5
+
+
+def _is_target(node_id: str) -> bool:
+    return node_id.startswith(TARGET_PREFIX)
+
+
+def _start_budgets(starts: list[str], limit: int) -> dict[str, int]:
+    """Chains each starting party may contribute."""
+    even = max(1, limit // len(starts))
+    targets = [nid for nid in starts if _is_target(nid)]
+    if not targets:
+        return {nid: even for nid in starts}
+    reserved = max(even, int(limit * TARGET_BUDGET_SHARE) // len(targets))
+    return {nid: (reserved if _is_target(nid) else even) for nid in starts}
+
+
 def sharing_chains(
-    graph: SharingGraph, parties: int = 4, limit: int = 1000,
+    graph: SharingGraph,
+    parties: int = 4,
+    limit: int = 1000,
+    track: str = PERSONAL_DATA,
+    subject_strict: bool = False,
 ) -> list[SharingChain]:
     """Chains along which data passes through ``parties`` distinct organisations."""
-    adjacency = flow_hops(graph)
+    adjacency = flow_hops(graph, track=track)
     named = {
         nid for nid, n in graph.nodes.items()
         if n.type in (NodeType.TARGET, NodeType.ENTITY)
     }
     found: list[SharingChain] = []
-    starts = sorted(nid for nid in named if adjacency.get(nid))
-    per_start = max(1, limit // len(starts)) if starts else limit
+    starts = sorted((nid for nid in named if adjacency.get(nid)),
+                    key=lambda nid: (not _is_target(nid), nid))
+    budgets = _start_budgets(starts, limit) if starts else {}
 
     def walk(path: list[str], hops: list[ChainHop], budget: list[int]) -> None:
         if budget[0] <= 0 or len(found) >= limit:
@@ -395,13 +650,27 @@ def sharing_chains(
         for hop in adjacency.get(path[-1], ()):
             if hop.dst in path or hop.dst not in named:
                 continue
+            if hops and not carries_upstream_data(hop.subject, strict=subject_strict):
+                continue
             walk(path + [hop.dst], hops + [hop], budget)
 
     for start in starts:
         if len(found) >= limit:
             break
-        walk([start], [], [per_start])
+        walk([start], [], [budgets[start]])
     return found
+
+
+def chains_by_track(
+    graph: SharingGraph, parties: int = 4, limit: int = 1000,
+    subject_strict: bool = False,
+) -> dict[str, list[SharingChain]]:
+    """Chains for each track separately."""
+    return {
+        track: sharing_chains(graph, parties=parties, limit=limit, track=track,
+                              subject_strict=subject_strict)
+        for track in TRACKS
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -474,7 +743,13 @@ def attach(
             graph.add_node(Node(id=nid, type=NodeType.GENERIC, display_name=name,
                                 hop_first_seen=hop + 1))
         else:
-            node = entity_node(name, hop=hop + 1)
+            if is_investor_parent(name):
+                continue
+            node = entity_node(
+                name, hop=hop + 1,
+                grounded=rel.get("grounded"),
+                confidence=float(rel.get("confidence") or 0.0),
+            )
             nid = node.id
             if nid == tid:
                 continue
@@ -486,6 +761,9 @@ def attach(
             data_type=rel.get("data_type") or "",
             purposes=list(rel.get("purposes") or ()),
             negative=bool(rel.get("negative")),
+            track=rel.get("track") or track_for_sources(rel.get("sources")),
+            subject=rel.get("subject") or UNKNOWN,
+            confidence=float(rel.get("confidence") or 0.0),
         )
         if rel.get("direction") == "upstream":
             graph.add_edge(EdgeKind.SUPPLIES, nid, tid, ev)
@@ -508,8 +786,12 @@ def attach(
                 owner_entity_id=eid, resolution_basis=obs.get("basis", ""),
                 hop_first_seen=hop + 1,
             ))
-            graph.add_edge(EdgeKind.CONTACTS, tid, did,
-                           Evidence(source=EvidenceSource.TRAFFIC, hop=hop))
-            graph.add_edge(EdgeKind.OWNED_BY, did, eid,
-                           Evidence(source=EvidenceSource.RESOLUTION, hop=hop,
-                                    snippet=obs.get("basis", "")))
+            graph.add_edge(EdgeKind.CONTACTS, tid, did, Evidence(
+                source=EvidenceSource.TRAFFIC, hop=hop,
+                track=PERSONAL_DATA, subject=SITE_VISITOR,
+            ))
+            graph.add_edge(EdgeKind.OWNED_BY, did, eid, Evidence(
+                source=EvidenceSource.RESOLUTION, hop=hop,
+                snippet=obs.get("basis", ""),
+                track=PERSONAL_DATA, subject=SITE_VISITOR,
+            ))

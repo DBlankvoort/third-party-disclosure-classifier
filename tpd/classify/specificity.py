@@ -423,8 +423,10 @@ def specificities_in_doc(
             scan = SpecScan()
         else:
             scan = _scan_prose(doc, ner_fn, first_party=first_party, policy_ctx=policy_ctx)
-        # Named orgs in the structure's tables, or enumerated in a flat vendor list.
-        struct_orgs = set(structural.table_named_orgs) | set(structural.list_named_orgs)
+        struct_orgs = {
+            o for o in set(structural.table_named_orgs) | set(structural.list_named_orgs)
+            if not _is_first_party(o, first_party)
+        }
         if struct_orgs:
             scan.specificities.add(Specificity.NAMED)
             scan.named_orgs = sorted(set(scan.named_orgs) | struct_orgs)

@@ -4,13 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse
 
 import tldextract
 
 from .. import lexicons
 from ..extract import parse_html
-from .base import CollectedDoc, Corpus, Target, fetch
+from .base import (
+    PROBE_WORKERS,
+    CollectedDoc,
+    Corpus,
+    FetchResult,
+    Target,
+    fetch,
+    warm_cache,
+)
 
 
 def _content_key(text: str) -> str:
@@ -101,9 +110,16 @@ def collect_website(
     base_host = urlparse(home).netloc or home
     seen_hashes: set[str] = set()
     saved_urls: set[str] = set()
+    warmed: set[str] = set()
+
+    def _fetch(url: str) -> FetchResult:
+        res = fetch(url, cache_dir=cache, force=force and url not in warmed,
+                    delay=delay)
+        warmed.add(url)
+        return res
 
     def _save(url: str, role: str, dedup: bool = False) -> CollectedDoc | None:
-        res = fetch(url, cache_dir=cache, force=force, delay=delay)
+        res = _fetch(url)
         if (res.final_url or url).rstrip("/") in saved_urls:
             return None
         # Content de-dup
@@ -162,15 +178,21 @@ def collect_website(
     # 4. fetch discovered companion docs ------------------------------------ #
     seen_urls = {d.url for d in docs}
     per_role: dict[str, int] = {}
-    for role, urls in discovered.items():
-        if role == "privacy_policy" or role not in _COMPANION_ROLES:
-            continue
+    companions = {
+        role: [u for u in urls
+               if u not in seen_urls and _same_site(u, base_host, policy_host)]
+        for role, urls in discovered.items()
+        if role != "privacy_policy" and role in _COMPANION_ROLES
+    }
+    warm = [u for urls in companions.values()
+            for u in urls[:lexicons.MAX_DOCS_PER_ROLE]]
+    warm_cache(warm, cache, force=force, delay=delay)
+    warmed.update(warm)
+    for role, urls in companions.items():
         for url in urls:
             if per_role.get(role, 0) >= lexicons.MAX_DOCS_PER_ROLE:
                 break
             if url in seen_urls:
-                continue
-            if not _same_site(url, base_host, policy_host):
                 continue
             if _save(url, role, dedup=True) is not None:
                 per_role[role] = per_role.get(role, 0) + 1
@@ -183,20 +205,28 @@ def collect_website(
             r = f"{urlparse(home).scheme or 'https'}://{h}"
             if r not in roots:
                 roots.append(r)
-    for role, paths in COMMON_COMPANION_PATHS:
-        done = False
+    collected_roles = {d.role for d in docs}
+    pending = [(role, paths) for role, paths in COMMON_COMPANION_PATHS
+               if role not in collected_roles]
+
+    def probe(paths) -> str:
+        """The first conventional path that serves a document, or ""."""
         for root in roots:
             for path in paths:
                 cand = urljoin(root + "/", path.lstrip("/"))
                 if cand in seen_urls:
                     continue
-                got = _save(cand, role, dedup=True)
+                if _fetch(cand).ok:
+                    return cand
+        return ""
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as pool:
+            hits = list(pool.map(probe, [paths for _, paths in pending]))
+        for (role, _), cand in zip(pending, hits, strict=True):
+            if cand and cand not in seen_urls:
+                _save(cand, role, dedup=True)
                 seen_urls.add(cand)
-                if got is not None:
-                    done = True
-                    break
-            if done:
-                break
 
     corpus.write_manifest(target, docs)
     return docs

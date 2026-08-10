@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
@@ -15,6 +16,9 @@ try:
 except Exception:  # pragma: no cover
     _HAVE_SPACY = False
     Doc = Span = object  # type: ignore
+
+
+DEFAULT_MODEL = os.environ.get("TPD_SPACY_MODEL") or "en_core_web_sm"
 
 
 @lru_cache(maxsize=1)
@@ -54,18 +58,18 @@ def _trim_start(doc, start: int, end: int) -> int:
 class NLP:
     """Thin wrapper over a spaCy pipeline plus PoliGrapher's NER."""
 
-    def __init__(self, model: str = "en_core_web_trf", model_path: Optional[str] = None):
+    def __init__(self, model: str = DEFAULT_MODEL, model_path: Optional[str] = None):
         if not _HAVE_SPACY:
             raise RuntimeError(
                 "spaCy is required for PoliGrapher's linguistic analysis. "
-                "Install with: pip install spacy && python -m spacy download en_core_web_trf"
+                f"Install with: pip install spacy && python -m spacy download {model}"
             )
-        # Prefer the transformer pipeline.
         try:
             self.nlp = spacy.load((model_path if model_path else "") + model)
         except Exception:
             raise RuntimeError(
-                "No spaCy English model found. Run: python -m spacy download en_core_web_trf"
+                f"No spaCy model {model!r} found. "
+                f"Run: python -m spacy download {model}"
             )
         # If a trained spancat/ner component exists, use it.
         self._has_custom_ner = any(
@@ -126,5 +130,5 @@ class NLP:
 
 
 @lru_cache(maxsize=4)
-def get_nlp(model: str = "en_core_web_trf", model_path: Optional[str] = None) -> NLP:
+def get_nlp(model: str = DEFAULT_MODEL, model_path: Optional[str] = None) -> NLP:
     return NLP(model=model, model_path=model_path)

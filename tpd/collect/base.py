@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -19,9 +23,13 @@ USER_AGENT = (
     "Mozilla/5.0 (compatible; tpd-research/0.1; +third-party-disclosure-typology) "
     "academic third-party disclosure pattern classifier"
 )
-DEFAULT_TIMEOUT = 15
+DEFAULT_TIMEOUT = (5, 15)
+_POOL_SIZE = 64
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"})
+for _scheme in ("http://", "https://"):
+    _SESSION.mount(_scheme, requests.adapters.HTTPAdapter(
+        pool_connections=_POOL_SIZE, pool_maxsize=_POOL_SIZE))
 
 
 @dataclass
@@ -137,10 +145,73 @@ def _cache_key(url: str) -> str:
     return hashlib.sha1(url.encode("utf-8")).hexdigest()
 
 
+# charset in a <meta> tag or an XML declaration, within the document head.
+_META_CHARSET_RE = re.compile(rb"""charset=["']?\s*([A-Za-z0-9_.:+-]+)""", re.I)
+_DECLARED_CHARSET_BYTES = 4096
+
+
+def _decode(resp) -> str:
+    """Decode a response body using the encoding the document itself declares."""
+    if "charset=" not in (resp.headers.get("Content-Type") or "").lower():
+        resp.encoding = _declared_charset(resp.content[:_DECLARED_CHARSET_BYTES])
+    return resp.text
+
+
+def _declared_charset(head: bytes) -> str | None:
+    """The codec a document declares for itself, when Python knows it."""
+    m = _META_CHARSET_RE.search(head)
+    if not m:
+        return None
+    name = m.group(1).decode("ascii", "ignore")
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
+# --------------------------------------------------------------------------- #
+# Per-origin deadline
+# --------------------------------------------------------------------------- #
+_DEADLINES = threading.local()
+
+# Reported in place of an HTTP error when a request was never attempted.
+DEADLINE_ERROR = "origin deadline exceeded"
+
+
+def remaining_budget() -> float | None:
+    """Seconds left in the calling thread's deadline, or None when unbounded."""
+    at = getattr(_DEADLINES, "at", None)
+    return None if at is None else at - time.monotonic()
+
+
+@contextmanager
+def deadline(seconds: float | None):
+    """Bound the wall clock the calling thread's fetches may consume."""
+    previous = getattr(_DEADLINES, "at", None)
+    _DEADLINES.at = None if not seconds else time.monotonic() + float(seconds)
+    try:
+        yield
+    finally:
+        _DEADLINES.at = previous
+
+
+def _bounded_timeout(timeout):
+    """``timeout`` clamped so no single request outlives the origin's budget."""
+    left = remaining_budget()
+    if left is None:
+        return timeout
+    if isinstance(timeout, tuple):
+        connect, read = timeout
+    else:
+        connect = read = timeout
+    return (min(connect, max(0.1, left)), min(read, max(0.1, left)))
+
+
 def fetch(
     url: str,
     cache_dir: Path | None = None,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: int | tuple[int, int] = DEFAULT_TIMEOUT,
     force: bool = False,
     delay: float = 0.0,
 ) -> FetchResult:
@@ -157,6 +228,12 @@ def fetch(
             except Exception:  # noqa: BLE001
                 pass
 
+    left = remaining_budget()
+    if left is not None and left <= 0:
+        return FetchResult(url=url, status=0, content_type="", text="",
+                           error=DEADLINE_ERROR)
+    timeout = _bounded_timeout(timeout)
+
     if delay:
         time.sleep(delay)
     try:
@@ -167,7 +244,7 @@ def fetch(
             text = pdf_to_html(resp.content)
         else:
             # Keep HTML/text and JSON.
-            text = resp.text if (
+            text = _decode(resp) if (
                 "html" in ctype or "text" in ctype or "json" in ctype or not ctype
             ) else ""
         result = FetchResult(
@@ -186,3 +263,27 @@ def fetch(
         except Exception:  # noqa: BLE001
             pass
     return result
+
+
+PROBE_WORKERS = 6
+
+
+def warm_cache(urls, cache_dir: Path | None, force: bool = False,
+               delay: float = 0.0, timeout: int | tuple[int, int] = DEFAULT_TIMEOUT) -> None:
+    """Fetch ``urls`` concurrently so a later sequential read finds them cached."""
+    urls = list(dict.fromkeys(u for u in urls if u))
+    if not urls or cache_dir is None:
+        return
+
+    at = getattr(_DEADLINES, "at", None)
+
+    def one(url: str):
+        _DEADLINES.at = at
+        return fetch(url, cache_dir=cache_dir, force=force, delay=delay,
+                     timeout=timeout)
+
+    if len(urls) == 1:
+        one(urls[0])
+        return
+    with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as pool:
+        list(pool.map(one, urls))

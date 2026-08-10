@@ -8,15 +8,13 @@ from pathlib import Path
 
 from .structured_relations import DOWNSTREAM
 
-# Narrative roles worth structural sharing analysis.
 DEFAULT_ROLES = {
     "privacy_policy", "cookie_policy", "do_not_sell", "dpa",
-    "partners_page", "help_doc",
 }
 
 CACHE_NAME = "poligraph.json"
 
-PIPELINE_VERSION = 8
+PIPELINE_VERSION = 9
 
 _GRAPHER = None
 _IMPORT_ERROR: str | None = None
@@ -45,6 +43,12 @@ def _grapher():
     return _GRAPHER
 
 
+def warm_pipeline() -> None:
+    """Load the language model up front, outside any latency being measured."""
+    if poligraph_available():
+        _grapher()
+
+
 def _doc_hash(html: str) -> str:
     return hashlib.sha1(html.strip().encode("utf-8", "ignore")).hexdigest()
 
@@ -55,9 +59,10 @@ def graphs_for_target(
     docs,
     roles: set[str] = DEFAULT_ROLES,
     force: bool = False,
-) -> dict[str, "object"]:
+) -> dict[str, object]:
     """Build PoliGraphs for a target's narrative documents."""
     from ..poligraph.graph import PoliGraph
+    from ..poligraph.nlp import DEFAULT_MODEL
 
     cache_path = Path(corpus.root) / target_id / CACHE_NAME
     cache: dict[str, dict] = {}
@@ -78,13 +83,15 @@ def graphs_for_target(
         h = _doc_hash(html)
         entry = cache.get(d.doc_id)
         if (entry and entry.get("hash") == h
-                and entry.get("version") == PIPELINE_VERSION):
+                and entry.get("version") == PIPELINE_VERSION
+                and entry.get("model") == DEFAULT_MODEL):
             graphs[d.doc_id] = PoliGraph.from_dict(entry["graph"])
             continue
         graph = _grapher().from_html(html, f"{target_id}/{d.doc_id}").validate()
         graphs[d.doc_id] = graph
         cache[d.doc_id] = {
-            "hash": h, "version": PIPELINE_VERSION, "graph": graph.to_dict()
+            "hash": h, "version": PIPELINE_VERSION, "model": DEFAULT_MODEL,
+            "graph": graph.to_dict(),
         }
         dirty = True
 
@@ -108,7 +115,7 @@ def _is_first_party_entity(entity: str, first_party: set[str] | None) -> bool:
 
 def _named_examples(graph, entity: str, limit: int = 5) -> list[str]:
     """Concrete entities the graph says the entity subsumes."""
-    from ..poligraph.graph import FIRST_PARTY, NodeType, UNSPECIFIED_ACTOR
+    from ..poligraph.graph import FIRST_PARTY, UNSPECIFIED_ACTOR, NodeType
 
     out = [
         n for n in graph.descendants(entity)
@@ -130,32 +137,50 @@ def _non_actor_entity(entity: str) -> bool:
     return bool(words) and words[-1] in _NON_ACTOR_TAILS
 
 
+def _clause_subject(text: str, role: str) -> str:
+    """Whose data a clause concerns."""
+    from ..lexicons import SERVICE_DATA_RE
+    from ..tracks import SERVICE_DATA, SERVICE_DATA_ROLES, SITE_VISITOR
+
+    if role in SERVICE_DATA_ROLES or (text and SERVICE_DATA_RE.search(text)):
+        return SERVICE_DATA
+    return SITE_VISITOR
+
+
 def relations_from_graph(
     graph,
     first_party: set[str] | None = None,
     doc_id: str = "",
+    role: str = "",
 ) -> list[dict]:
     """Flatten a PoliGraph's COLLECT / NOT_COLLECT edges into relation dicts."""
-    from ..poligraph.graph import EdgeType, UNSPECIFIED_ACTOR
+    from ..poligraph.graph import UNSPECIFIED_ACTOR, EdgeType
+    from ..tracks import PERSONAL_DATA
+    from .named_entities import grounded_org
 
     relations: list[dict] = []
     for e in graph.collect_edges(include_negative=True):
         if _non_actor_entity(e.entity):
             continue
         fp = _is_first_party_entity(e.entity, first_party)
+        text = e.text[0][:300] if e.text else ""
         relations.append({
             "entity": e.entity,
             "party": "first" if fp else "third",
-            "unspecified": e.entity == UNSPECIFIED_ACTOR,
+            "unspecified": e.entity == UNSPECIFIED_ACTOR or not (
+                fp or grounded_org(e.entity)),
             "data_type": e.data_type,
             "action": e.action.value,
             "negative": e.edge_type == EdgeType.NOT_COLLECT,
             "direction": DOWNSTREAM,
+            "track": PERSONAL_DATA,
+            "subject": _clause_subject(text, role),
+            "grounded": fp or grounded_org(e.entity),
             "purposes": sorted(p.value for p in e.purposes),
             "examples": [] if fp else _named_examples(graph, e.entity),
             "qualifier": "",
             "sources": ["policy"],
-            "text": (e.text[0][:300] if e.text else ""),
+            "text": text,
             "doc_ids": [doc_id] if doc_id else [],
         })
     return relations
@@ -163,17 +188,23 @@ def relations_from_graph(
 
 def merge_relations(rel_lists) -> list[dict]:
     """Merge per-document relation lists."""
+    from ..tracks import PERSONAL_DATA, UNKNOWN
+
     merged: dict[tuple, dict] = {}
     for rels in rel_lists:
         for r in rels:
             key = (r["entity"], r["data_type"], r["action"], r["negative"],
-                   r.get("direction", DOWNSTREAM))
+                   r.get("direction", DOWNSTREAM),
+                   r.get("track", PERSONAL_DATA), r.get("subject", UNKNOWN))
             if key in merged:
                 m = merged[key]
                 m["purposes"] = sorted(set(m["purposes"]) | set(r["purposes"]))
                 m["examples"] = sorted(set(m["examples"]) | set(r["examples"]))[:5]
                 m["doc_ids"] = sorted(set(m["doc_ids"]) | set(r["doc_ids"]))
                 m["sources"] = sorted(set(m.get("sources", [])) | set(r.get("sources", [])))
+                m["signals"] = sorted(set(m.get("signals", [])) | set(r.get("signals", [])))
+                m["confidence"] = max(m.get("confidence", 0.0), r.get("confidence", 0.0))
+                m["grounded"] = bool(m.get("grounded")) or bool(r.get("grounded"))
                 # A "direct" authorization outranks a "reseller" one.
                 if not m.get("qualifier") or r.get("qualifier") == "direct":
                     m["qualifier"] = r.get("qualifier", "") or m.get("qualifier", "")
@@ -185,6 +216,7 @@ def merge_relations(rel_lists) -> list[dict]:
         merged.values(),
         key=lambda r: (r["party"] != "third", r["negative"],
                        r.get("direction", DOWNSTREAM) != DOWNSTREAM,
+                       r.get("track", PERSONAL_DATA) != PERSONAL_DATA,
                        r["entity"], r["data_type"]),
     )
 
@@ -199,8 +231,10 @@ def target_relations(
 ) -> list[dict]:
     """The merged sharing-relation list for one target's document set."""
     graphs = graphs_for_target(corpus, target_id, docs, roles=roles, force=force)
+    role_by_doc = {d.doc_id: d.role for d in docs}
     return merge_relations(
-        relations_from_graph(g, first_party=first_party, doc_id=doc_id)
+        relations_from_graph(g, first_party=first_party, doc_id=doc_id,
+                             role=role_by_doc.get(doc_id, ""))
         for doc_id, g in graphs.items()
     )
 

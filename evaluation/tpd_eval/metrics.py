@@ -251,7 +251,8 @@ class LatencyReport:
             f" [secondary: 1 doc at {self.doc_max*1000:.0f}ms]"
         )
         return (
-            f"target-set max={self.target_max*1000:.0f}ms mean={self.target_mean*1000:.0f}ms "
+            f"classify pass, target-set max={self.target_max*1000:.0f}ms "
+            f"mean={self.target_mean*1000:.0f}ms "
             f"under-1s={_pct(self.target_under_1s)} "
             f"-> {'PASS' if self.passed else 'FAIL'}; "
             f"doc max={self.doc_max*1000:.0f}ms mean={self.doc_mean*1000:.0f}ms "

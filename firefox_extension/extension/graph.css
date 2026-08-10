@@ -205,3 +205,14 @@ canvas.dragging { cursor: grabbing; }
   color: var(--muted);
   word-break: break-word;
 }
+
+.edit-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.mini {
+  font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  cursor: pointer;
+}
+.mini:hover { border-color: var(--accent); color: var(--accent); }
+.mini.danger:hover { border-color: var(--neg); color: var(--neg); }
+.edit-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.detail.edit { border-top: 1px solid var(--line); padding-top: 10px; }

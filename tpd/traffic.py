@@ -5,6 +5,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from .entities import canonical_key, entity_for_domain, registrable_domain
+from .tracks import PERSONAL_DATA, SITE_VISITOR
 
 _TYPE_DATA = {
     "script": ("cookie / device identifiers", ["services"]),
@@ -113,6 +114,9 @@ def traffic_relations(
                 "action": "collect",
                 "negative": False,
                 "direction": DOWNSTREAM,
+                "track": PERSONAL_DATA,
+                "subject": SITE_VISITOR,
+                "grounded": True,
                 "purposes": list(purposes),
                 "examples": [],
                 "qualifier": rec["basis"],

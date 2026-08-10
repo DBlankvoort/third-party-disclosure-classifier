@@ -99,10 +99,11 @@ class TestNameResolution:
         assert resolve_name("ad-generation.jp").display == "Ad-Generation"
 
     def test_a_domain_with_no_brand_label_stands_as_written(self):
-        # "advertising" names no organisation, so the registrable domain is
-        # the name, and a policy's mention of advertising stays separate.
-        assert resolve_name("advertising.com").display == "advertising.com"
-        assert resolve_name("advertising.com").key != resolve_name("advertising").key
+        assert resolve_name("analytics.com").display == "analytics.com"
+        assert resolve_name("analytics.com").key != resolve_name("analytics").key
+
+    def test_a_generic_label_resolves_to_its_owner_when_recorded(self):
+        assert resolve_name("advertising.com").display == "Yahoo"
 
     def test_the_domain_a_name_carries_is_recorded(self):
         assert resolve_name("adform.com").domain == "adform.com"

@@ -182,3 +182,43 @@ class TestGvl:
 
     def test_prose_yields_nothing(self):
         assert registry_relations("We value your privacy.") == []
+
+
+# --------------------------------------------------------------------------- #
+# Vendor columns carrying several parties per cell
+# --------------------------------------------------------------------------- #
+class TestMultiPartyCells:
+    def test_linked_names_divide_the_cell(self):
+        html = (
+            "<html><body><table>"
+            "<tr><th>Cookie</th><th>Who sets these cookies</th></tr>"
+            "<tr><td>_v</td><td>"
+            '<a href="https://vimeo.com/legal/privacy/policy">Vimeo</a><br/>'
+            '<a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a>'
+            "</td></tr>"
+            "</table></body></html>"
+        )
+        rels = table_relations(html, role="cookie_policy")
+        assert {r["entity"] for r in rels} == {"vimeo", "cloudflare"}
+
+    def test_markup_inside_one_name_is_kept_whole(self):
+        html = (
+            "<html><body><table>"
+            "<tr><th>Cookie</th><th>Provider</th></tr>"
+            "<tr><td>_ga</td><td>Google <b>Analytics</b></td></tr>"
+            "</table></body></html>"
+        )
+        rels = table_relations(html, role="cookie_policy")
+        assert {r["entity"] for r in rels} == {"google analytics"}
+
+    def test_prose_cell_is_not_divided_by_its_citation(self):
+        html = (
+            "<html><body><table>"
+            "<tr><th>Cookie</th><th>Domain</th></tr>"
+            "<tr><td>_x</td><td>*.casalemedia.com; Partitioned to the top-level "
+            'site (see <a href="https://developer.chrome.com/docs/chips/">CHIPS</a>)'
+            "</td></tr>"
+            "</table></body></html>"
+        )
+        rels = table_relations(html, role="cookie_policy")
+        assert all("developer.chrome.com" not in r["entity"] for r in rels)

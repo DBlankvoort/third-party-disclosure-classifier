@@ -14,7 +14,7 @@ from urllib.parse import urljoin, urlparse
 
 from .. import lexicons
 from ..typology import TargetType
-from .base import CollectedDoc, Corpus, Target, fetch
+from .base import CollectedDoc, Corpus, Target, fetch, warm_cache
 from ..classify.document_class import classify_medium
 from ..extract import parse_html
 from .appstore import collect_app_store_app
@@ -245,15 +245,25 @@ def augment_disclosure_target(
                 candidates.setdefault(urljoin(root + "/", path.lstrip("/")), role)
 
     # 3. Fetch candidates
+    per_role_warm: dict[str, int] = {}
+    warm: list[str] = []
+    for url, role in candidates.items():
+        if per_role_warm.get(role, 0) < lexicons.MAX_DOCS_PER_ROLE:
+            per_role_warm[role] = per_role_warm.get(role, 0) + 1
+            warm.append(url)
+    warm_cache(warm, corpus.cache_dir, force=force, delay=delay)
+
     seen_hashes = {_content_key(corpus.read_doc_html(d)) for d in docs if d.ok}
     seen_urls = {(d.url or "").rstrip("/") for d in docs if d.ok}
     per_role: dict[str, int] = {}
     new_docs: list[CollectedDoc] = []
     base_idx = len(docs)
+    warmed = set(warm)
     for url, role in candidates.items():
         if per_role.get(role, 0) >= lexicons.MAX_DOCS_PER_ROLE:
             continue
-        res = fetch(url, cache_dir=corpus.cache_dir, force=force, delay=delay)
+        res = fetch(url, cache_dir=corpus.cache_dir, delay=delay,
+                    force=force and url not in warmed)
         if not (res.ok and res.text):
             continue
         final = (res.final_url or url).rstrip("/")
@@ -325,11 +335,12 @@ def augment_target(
     existing_roles = {d.role for d in docs}
     new_docs: list[CollectedDoc] = []
     base_idx = len(docs)
-    for path, role in registry_paths_for(target.type):
-        if role in existing_roles:
-            continue
-        url = urljoin(root + "/", path.lstrip("/"))
-        res = fetch(url, cache_dir=corpus.cache_dir, force=force, delay=delay)
+    wanted = [(urljoin(root + "/", path.lstrip("/")), role)
+              for path, role in registry_paths_for(target.type)
+              if role not in existing_roles]
+    warm_cache([u for u, _ in wanted], corpus.cache_dir, force=force, delay=delay)
+    for url, role in wanted:
+        res = fetch(url, cache_dir=corpus.cache_dir, delay=delay)
         kind = lexicons.machine_readable_kind(res.text) if (res.ok and res.text) else ""
         if not kind:
             continue  # dead URL / 404 HTML / empty

@@ -325,12 +325,15 @@ class TestExpandNode:
 
 class TestFlowDirection:
     def test_a_supplier_edge_runs_along_the_flow_of_data(self):
+        from tpd.tracks import INVENTORY
+
         g = SharingGraph()
         tid = add_target(g, "exchange", "exchange.example",
                          [_rel("Publisher A", direction="upstream",
-                               sources=["sellers_json"])])
-        (chain,) = sharing_chains(g, parties=2)
+                               sources=["sellers_json"], track=INVENTORY)])
+        (chain,) = sharing_chains(g, parties=2, track=INVENTORY)
         assert chain.parties == [entity_node_id("Publisher A"), tid]
+        assert sharing_chains(g, parties=2) == []
 
     def test_evidence_survives_into_the_hop(self):
         g = SharingGraph()
