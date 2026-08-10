@@ -42,7 +42,7 @@ def _entity_overrides() -> dict:
     if not path:
         return {}
     try:
-        from tpd.evaluate import load_entity_domains
+        from tpd.entities import load_entity_domains
 
         return load_entity_domains(path)
     except Exception as exc:  # noqa: BLE001

@@ -9,9 +9,10 @@ import threading
 import time
 from pathlib import Path
 
-from ..collect.base import CollectedDoc, Corpus, Target, fetch
-from ..collect.pdf import looks_like_pdf
-from ..evaluate.labeling import PROPAGATION_FIELDS, RELEVANCE_FIELDS, TYPOLOGY_FIELDS
+from tpd.collect.base import CollectedDoc, Corpus, Target, fetch
+from tpd.collect.pdf import looks_like_pdf
+
+from ..labeling import PROPAGATION_FIELDS, RELEVANCE_FIELDS, TYPOLOGY_FIELDS
 
 PRESENCE_FIELDS = [
     "label_order", "target_id", "target_type", "url",
@@ -251,7 +252,7 @@ class AnnotationStore:
         """(html, final_url, error) for a manual fetch."""
         if render and not looks_like_pdf(url=url):
             try:
-                from ..collect.runner import Renderer
+                from tpd.collect.runner import Renderer
 
                 with Renderer() as r:
                     html = r.render(url) if r.available else None

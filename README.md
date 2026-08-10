@@ -58,6 +58,7 @@ pip install -e ".[dev]"       # pytest + ruff
 pip install -e ".[browser]"   # playwright, for JS-rendered collection
 python -m playwright install firefox
 pip install -e ".[ml]"        # torch/transformers/setfit, for Polisis components
+pip install -e evaluation/    # evaluation
 ```
 
 ## Usage
@@ -66,15 +67,19 @@ pip install -e ".[ml]"        # torch/transformers/setfit, for Polisis component
 Navigate to the root directory, then
 
 ```sh
-.venv/bin/python firefox-extension/server/server.py
+.venv/bin/python firefox_extension/server/server.py
 ```
 
-to start the server. Afterwards, navigate to `about:debugging` -> 'This Firefox' -> 'Load Temporary Add-on' -> Select `firefox-extension/extension/manifest.json` to load the extension for the session.
+to start the server. Afterwards, navigate to `about:debugging` -> 'This Firefox' -> 'Load Temporary Add-on' -> Select `firefox_extension/extension/manifest.json` to load the extension for the session.
 
 ### `tpd` package
-Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for arguments. The package is primarily intended to validate the analysis approach through e.g. collecting and analysing data from many URLs and allowing for comparison against hand-labels.
+Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for arguments. 4
+### `tpd-eval` package
+Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
 
 ## Repository layout
+
+### Core
 
 | Path | Contents |
 | --- | --- |
@@ -90,10 +95,21 @@ Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for argumen
 | `tpd/classify/` | Relevance, document-class, specificity, and typology classifiers |
 | `tpd/poligraph/` | PoliGraph re-implementation |
 | `tpd/polisis/` | Polisis-style hierarchical classifiers |
-| `tpd/evaluate/` | Labelling sheets and agreement/latency metrics |
-| `tpd/annotate/` | Manual gold-labelling |
-| `firefox-extension/` | Browser extension code |
-| `tests/` | Pytest suite for the codebase |
+| `firefox_extension/` | Browser extension code |
+| `models/` | POLISIS model weights |
+| `tests/` | Pytest suite for the core package |
+
+### Evaluation
+
+| Path | Contents |
+| --- | --- |
+| `evaluation/tpd_eval/labeling.py` | Labelling sheets and gold-label loading |
+| `evaluation/tpd_eval/metrics.py` | Agreement, coverage, identification, chain, and latency metrics |
+| `evaluation/tpd_eval/annotate/` | Manual gold-labelling interface |
+| `evaluation/data_sources/` | Seed lists the study corpora were sampled from |
+| `evaluation/labels/` | Hand-assigned gold labels per corpus |
+| `evaluation/corpus/` | Collected document sets (untracked) |
+| `evaluation/tests/` | Pytest suite for the harness |
 
 ## Testing
 

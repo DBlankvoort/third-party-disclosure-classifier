@@ -4,20 +4,7 @@ from __future__ import annotations
 
 import csv
 
-from tpd.evaluate import (
-    arrangement_coverage,
-    arrangement_id,
-    chain_verification,
-    detected_arrangements,
-    load_chain_gold,
-    load_coverage_gold,
-    load_entity_domains,
-    sample_targets,
-    write_chain_sheet,
-    write_coverage_sheet,
-    write_entity_resolution_sheet,
-)
-from tpd.evaluate.metrics import TARGET_VERIFIED_CHAINS
+from tpd.entities import load_entity_domains
 from tpd.sharing_graph import (
     EdgeKind,
     Evidence,
@@ -31,6 +18,20 @@ from tpd.sharing_graph import (
     sharing_chains,
     target_node_id,
 )
+
+from tpd_eval import (
+    arrangement_coverage,
+    arrangement_id,
+    chain_verification,
+    detected_arrangements,
+    load_chain_gold,
+    load_coverage_gold,
+    sample_targets,
+    write_chain_sheet,
+    write_coverage_sheet,
+    write_entity_resolution_sheet,
+)
+from tpd_eval.metrics import TARGET_VERIFIED_CHAINS
 
 
 def _fill(path, column, value):

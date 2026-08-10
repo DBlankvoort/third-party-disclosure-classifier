@@ -1,4 +1,4 @@
-"""Evaluation + hand-labelling."""
+"""Evaluation and hand-labelling for the third-party disclosure classifier."""
 
 from .labeling import (
     COVERAGE_SAMPLE_SIZE,
@@ -7,7 +7,6 @@ from .labeling import (
     distinct_data_type_clauses,
     load_chain_gold,
     load_coverage_gold,
-    load_entity_domains,
     load_presence_gold,
     load_presence_doc_ids,
     load_propagation_gold,
@@ -69,7 +68,6 @@ __all__ = [
     "load_propagation_gold",
     "load_chain_gold",
     "load_coverage_gold",
-    "load_entity_domains",
     "RelevanceReport",
     "AgreementReport",
     "ArrangementCoverageReport",

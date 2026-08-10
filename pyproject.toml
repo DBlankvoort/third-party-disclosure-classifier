@@ -43,7 +43,6 @@ include = ["tpd*"]
 
 [tool.setuptools.package-data]
 "tpd.poligraph.data" = ["*.json"]
-"tpd.annotate" = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -57,5 +56,5 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+select = ["E", "F", "W", "I", "B", "UP", "TID251"]
 ignore = ["E501"]

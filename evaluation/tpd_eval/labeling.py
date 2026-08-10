@@ -7,7 +7,7 @@ import random
 import sys
 from pathlib import Path
 
-from ..classify.run import CorpusResult
+from tpd.classify.run import CorpusResult
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
@@ -245,7 +245,7 @@ def write_propagation_sheet(relations_by_target: dict[str, list[dict]], path: st
                             order_seed: int = DEFAULT_ORDER_SEED,
                             prior_path: str | Path | None = None) -> int:
     """Write a hand-review sheet data type propagation."""
-    from ..poligraph.ontology import global_data_ontology
+    from tpd.poligraph.ontology import global_data_ontology
 
     ontology = global_data_ontology()
     clauses = distinct_data_type_clauses(relations_by_target)
@@ -302,8 +302,8 @@ def write_entity_resolution_sheet(graph, path: str | Path,
                                   overrides: dict[str, str] | None = None,
                                   prior_path: str | Path | None = None) -> int:
     """Write the organisation-to-domain sheet a graph's expansion depends on."""
-    from ..entities import resolve_entity_domain, resolve_name
-    from ..sharing_graph import NodeType
+    from tpd.entities import resolve_entity_domain, resolve_name
+    from tpd.sharing_graph import NodeType
 
     prior: dict[str, tuple[str, str]] = {}
     if prior_path:
@@ -343,18 +343,6 @@ def write_entity_resolution_sheet(graph, path: str | Path,
         w.writeheader()
         w.writerows(rows)
     return len(rows)
-
-
-def load_entity_domains(path: str | Path) -> dict[str, str]:
-    """Hand-supplied organisation-to-domain mappings, keyed canonically."""
-    out: dict[str, str] = {}
-    with open(path, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            key = (row.get("canonical_key") or "").strip()
-            domain = (row.get("gold_domain") or "").strip().lower()
-            if key and domain:
-                out[key] = domain
-    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -438,7 +426,7 @@ def sample_targets(target_ids, n: int = COVERAGE_SAMPLE_SIZE,
 
 def arrangement_id(target_id: str, entity: str) -> str:
     """The key one third-party arrangement is counted under."""
-    from ..entities import canonical_key
+    from tpd.entities import canonical_key
 
     return f"{target_id}::{canonical_key(entity) or entity.strip().lower()}"
 

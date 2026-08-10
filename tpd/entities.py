@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import csv
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 import tldextract
 
@@ -481,6 +483,18 @@ def resolve_entity_domain(
         if hints and pkey in hints:
             return hints[pkey], "name_prefix"
     return "", "unresolved"
+
+
+def load_entity_domains(path: str | Path) -> dict[str, str]:
+    """Organisation-to-domain mappings"""
+    out: dict[str, str] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            key = (row.get("canonical_key") or "").strip()
+            domain = (row.get("gold_domain") or "").strip().lower()
+            if key and domain:
+                out[key] = domain
+    return out
 
 
 def observed_domain_hints(observed) -> dict[str, str]:

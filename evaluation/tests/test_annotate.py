@@ -3,10 +3,10 @@
 import csv
 
 import pytest
-
-from tpd.annotate.store import PRESENCE_SHEET, AnnotationStore
 from tpd.collect.base import CollectedDoc, Corpus, Target
-from tpd.evaluate.labeling import (
+
+from tpd_eval.annotate.store import PRESENCE_SHEET, AnnotationStore
+from tpd_eval.labeling import (
     PROPAGATION_FIELDS,
     RELEVANCE_FIELDS,
     TYPOLOGY_FIELDS,
@@ -157,7 +157,7 @@ def test_manual_doc_lifecycle(store, monkeypatch):
     }
 
     # Gold survives regeneration of both sheets
-    import tpd.annotate.store as store_mod
+    import tpd_eval.annotate.store as store_mod
     for name, fields in (("relevance_labels.csv", RELEVANCE_FIELDS),
                          ("typology_labels.csv", TYPOLOGY_FIELDS)):
         fresh = [dict(r, **{k: "" for k in ("gold_relevant", "gold_facets") if k in r})

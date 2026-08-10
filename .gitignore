@@ -1,8 +1,9 @@
 /models
-/corpus
 /out
-/labels
 /project_goals
+/evaluation/corpus
+/evaluation/labels
+/evaluation/out
 _cache_corpus/
 
 __pycache__/

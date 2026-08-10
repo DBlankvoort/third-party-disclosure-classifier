@@ -7,14 +7,15 @@ import csv
 from tpd.classify.run import CorpusResult
 from tpd.classify.typology_clf import DocClassification, TargetClassification
 from tpd.collect.base import CollectedDoc, Corpus, Target
-from tpd.evaluate.labeling import (
+
+from tpd_eval.labeling import (
     RELEVANCE_FIELDS,
     TYPOLOGY_FIELDS,
     load_presence_doc_ids,
     load_typology_gold_by_doc,
     load_typology_gold_docs,
 )
-from tpd.evaluate.metrics import agreement, naming_rate, policy_identification
+from tpd_eval.metrics import agreement, naming_rate, policy_identification
 
 TID = "website__example"
 
@@ -107,7 +108,7 @@ class TestNamingRate:
 
 class TestPropagationStaleness:
     def test_clauses_no_longer_extracted_leave_the_review(self):
-        from tpd.evaluate.metrics import propagation
+        from tpd_eval.metrics import propagation
 
         gold = {f"t::e{i}::personal information": True for i in range(30)}
         gold["t::vendor::access information"] = False

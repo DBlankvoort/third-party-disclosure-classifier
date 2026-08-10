@@ -91,7 +91,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, html[:_RAW_VIEW_MAX].encode("utf-8"),
                        "text/plain; charset=utf-8")
         elif view == "text":
-            from ..extract import parse_html
+            from tpd.extract import parse_html
 
             parsed = parse_html(html)
             self._json({"title": parsed.title, "segments": parsed.segments})

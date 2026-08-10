@@ -5,8 +5,8 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass, field
 
-from ..classify.run import CorpusResult
-from ..collect.base import Corpus
+from tpd.classify.run import CorpusResult
+from tpd.collect.base import Corpus
 
 # Key thresholds
 TARGET_RECALL = 0.90
@@ -429,7 +429,7 @@ def ontology_accommodation(
 ) -> OntologyAccommodationReport:
     """Fraction of extracted data-type terms the global ontology recognises."""
     if ontology is None:
-        from ..poligraph.ontology import global_data_ontology
+        from tpd.poligraph.ontology import global_data_ontology
 
         ontology = global_data_ontology()
 

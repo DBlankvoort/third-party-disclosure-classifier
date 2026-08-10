@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tpd-eval"
+version = "1.0.0"
+description = "Evaluation suite for project."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+authors = [{ name = "Dick Blankvoort", email = "dahblankvoort@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "third-party-disclosure-classifier",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+tpd-eval = "tpd_eval.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["tpd_eval*"]
+
+[tool.setuptools.package-data]
+"tpd_eval.annotate" = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
