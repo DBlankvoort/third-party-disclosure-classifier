@@ -54,27 +54,20 @@ def _trim_start(doc, start: int, end: int) -> int:
 class NLP:
     """Thin wrapper over a spaCy pipeline plus PoliGrapher's NER."""
 
-    def __init__(self, model: str = "en_core_web_sm", model_path: Optional[str] = None):
+    def __init__(self, model: str = "en_core_web_trf", model_path: Optional[str] = None):
         if not _HAVE_SPACY:
             raise RuntimeError(
                 "spaCy is required for PoliGrapher's linguistic analysis. "
-                "Install with: pip install spacy && python -m spacy download en_core_web_sm"
+                "Install with: pip install spacy && python -m spacy download en_core_web_trf"
             )
         # Prefer the transformer pipeline.
-        self.nlp = None
-        for name in ([model_path] if model_path else []) + ["en_core_web_trf", model]:
-            if not name:
-                continue
-            try:
-                self.nlp = spacy.load(name)
-                break
-            except Exception:
-                continue
-        if self.nlp is None:
+        try:
+            self.nlp = spacy.load((model_path if model_path else "") + model)
+        except Exception:
             raise RuntimeError(
-                "No spaCy English model found. Run: python -m spacy download en_core_web_sm"
+                "No spaCy English model found. Run: python -m spacy download en_core_web_trf"
             )
-        # If a trained DATA/ENTITY spancat/ner component exists, use it.
+        # If a trained spancat/ner component exists, use it.
         self._has_custom_ner = any(
             lbl in self.nlp.pipe_labels.get("ner", [])
             for lbl in ("DATA", "ENTITY")
@@ -133,5 +126,5 @@ class NLP:
 
 
 @lru_cache(maxsize=4)
-def get_nlp(model: str = "en_core_web_sm", model_path: Optional[str] = None) -> NLP:
+def get_nlp(model: str = "en_core_web_trf", model_path: Optional[str] = None) -> NLP:
     return NLP(model=model, model_path=model_path)

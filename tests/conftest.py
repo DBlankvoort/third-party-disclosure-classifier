@@ -1,7 +1,5 @@
 """Shared fixtures for the test suite."""
-
 from __future__ import annotations
-
 import pytest
 
 
@@ -16,7 +14,7 @@ def _small_model_available() -> bool:
 HAVE_MODEL = _small_model_available()
 
 requires_model = pytest.mark.skipif(
-    not HAVE_MODEL, reason="spaCy model en_core_web_sm not installed"
+    not HAVE_MODEL, reason="spaCy model en_core_web_trf not installed"
 )
 
 
@@ -28,4 +26,4 @@ def poligrapher():
     from tpd.poligraph.nlp import NLP
     from tpd.poligraph.poligrapher import PoliGrapher
 
-    return PoliGrapher(nlp=NLP(model="en_core_web_sm"))
+    return PoliGrapher(nlp=NLP(model="en_core_web_trf"))
