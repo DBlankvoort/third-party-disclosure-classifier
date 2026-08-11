@@ -249,12 +249,159 @@ ENTITY_ALIASES = {
     "verizonmedia": "yahoo",
     "oath": "yahoo",
     "aol": "yahoo",
+    "amazoncom": "amazon",
 }
 
 
 def merged_key(key: str) -> str:
     """The key an organisation's several corporate identities share."""
     return ENTITY_ALIASES.get(key, key)
+
+
+# --------------------------------------------------------------------------- #
+# Services and organisations
+# --------------------------------------------------------------------------- #
+_SERVICE_TAILS = {
+    "advertising": [
+        "ads", "ad", "adwords", "adsense", "admob", "doubleclick",
+        "ad manager", "ad server",
+        "advertising", "advertising cloud", "ad exchange", "adx",
+        "display network", "audience network", "audience studio",
+        "demand", "exchange bidding", "dsp", "ssp", "pixel", "pixel tags",
+        "tag manager", "tags", "marketing cloud", "marketing platform",
+    ],
+    "analytics": [
+        "analytics", "measurement", "insights", "attribution", "clarity",
+        "moat", "audience insights", "data cloud", "customer data platform",
+    ],
+    "services": [
+        "cloud", "web services", "aws", "azure", "hosting", "storage",
+        "sheets", "docs", "drive", "maps", "fonts", "sdk", "api", "platform",
+        "workspace", "suite", "cdn", "bedrock", "openai service", "heroku",
+        "firebase", "crashlytics", "bigquery",
+    ],
+    "security": ["recaptcha", "captcha"],
+}
+_TAIL_PURPOSE = {
+    tail: purpose
+    for purpose, tails in _SERVICE_TAILS.items()
+    for tail in tails
+}
+_VERSION_TAIL = r"(?:\s*v?\d+(?:\.\d+)*)?[\s)\].]*$"
+_SERVICE_TAIL_RE = re.compile(
+    r"[\s,]*[(\-–—:]?\s*\b(" + "|".join(
+        re.escape(t) for t in sorted(_TAIL_PURPOSE, key=len, reverse=True)
+    ) + r")\b" + _VERSION_TAIL,
+    re.IGNORECASE,
+)
+_PLAIN_TAILS = ("technologies", "labs", "studio", "express", "business",
+                "commerce", "shopping", "pay", "wallet", "search", "news")
+_PLAIN_TAIL_RE = re.compile(
+    r"[\s,]*[(\-–—:]?\s*\b(" + "|".join(_PLAIN_TAILS) + r")\b[\s)\].]*$",
+    re.IGNORECASE,
+)
+_MIN_SERVICE_HEAD = 3
+
+_BRAND_SERVICES = {
+    "admob": ("Google", "advertising"),
+    "adsense": ("Google", "advertising"),
+    "adwords": ("Google", "advertising"),
+    "doubleclick": ("Google", "advertising"),
+    "doubleclickformadvertisers": ("Google", "advertising"),
+    "campaignmanager": ("Google", "advertising"),
+    "firebase": ("Google", "services"),
+    "crashlytics": ("Google", "services"),
+    "bigquery": ("Google", "services"),
+    "recaptcha": ("Google", "security"),
+    "azure": ("Microsoft", "services"),
+    "appnexus": ("Microsoft", "advertising"),
+    "xandr": ("Microsoft", "advertising"),
+    "aws": ("Amazon", "services"),
+}
+
+
+_LEGAL_QUALIFIER_RE = re.compile(
+    r"\b(?:ireland|irish|uk|u\.k|britain|emea|apac|americas|europe|european|"
+    r"france|french|germany|german|deutschland|netherlands|dutch|spain|italy|"
+    r"sweden|denmark|norway|poland|portugal|switzerland|austria|belgium|"
+    r"singapore|japan|korea|china|india|brazil|mexico|canada|australia|"
+    r"international|global|worldwide|holdings?|group|subsidiar\w+|"
+    r"unlimited|llc|inc|ltd|limited|gmbh|b\.?v|s\.?a|s\.?a\.?r\.?l|plc|pte|pty)\b",
+    re.IGNORECASE,
+)
+_MAX_OPERATOR_TOKENS = 4
+
+
+def _tail_purpose_of(remainder: str) -> str:
+    """The purpose a product's name attests, where its words carry one."""
+    m = _SERVICE_TAIL_RE.search(remainder)
+    return _TAIL_PURPOSE[m.group(1).lower()] if m is not None else ""
+
+
+def _curated_operator(key: str, surface: str) -> bool:
+    return key in DISPLAY_FORMS or surface.lower() in _GAZ_DISPLAY
+
+
+def _operator_prefix(surface: str) -> tuple[str, str]:
+    """The curated operator a surface opens with, and what follows it."""
+    tokens = surface.split()
+    for cut in range(min(_MAX_OPERATOR_TOKENS, len(tokens) - 1), 0, -1):
+        head = " ".join(tokens[:cut]).strip(" ,.-([")
+        if len(head) < _MIN_SERVICE_HEAD:
+            continue
+        if _curated_operator(merged_key(canonical_key(head)), head):
+            return head, " ".join(tokens[cut:])
+    return "", ""
+
+
+def split_service(name: str) -> tuple[str, str]:
+    """Split a product name into ``(operator, purpose)``.
+
+    Returns ``("", "")`` where the surface names an organisation in its own
+    right, or where the head left by stripping the product falls outside the
+    operators this project curates.
+    """
+    surface = clean_company_name(str(name or "").strip())
+    if not surface or as_host(surface):
+        return "", ""
+    branded = _BRAND_SERVICES.get(canonical_key(surface))
+    if branded is not None:
+        return branded
+    head, purpose = surface, ""
+    for _ in range(3):
+        m = _SERVICE_TAIL_RE.search(head)
+        tail_purpose = _TAIL_PURPOSE[m.group(1).lower()] if m is not None else ""
+        if m is None:
+            m = _PLAIN_TAIL_RE.search(head)
+        if m is None:
+            break
+        stripped = head[:m.start()].strip(" ,.-([")
+        if len(stripped) < _MIN_SERVICE_HEAD:
+            break
+        purpose = purpose or tail_purpose
+        head = stripped
+    head = clean_company_name(head)
+    if head.lower() == surface.lower():
+        head, remainder = _operator_prefix(surface)
+        if not head or "," in remainder or _LEGAL_QUALIFIER_RE.search(remainder):
+            return "", ""
+        purpose = _tail_purpose_of(remainder)
+    if len(head) < _MIN_SERVICE_HEAD:
+        return "", ""
+    branded = _BRAND_SERVICES.get(canonical_key(head))
+    if branded is not None:
+        return branded[0], purpose or branded[1]
+    key = merged_key(canonical_key(head))
+    if not key:
+        return "", ""
+    if not (key in DISPLAY_FORMS or head.lower() in _GAZ_DISPLAY):
+        return "", ""
+    return head, purpose
+
+
+def service_purpose(name: str) -> str:
+    """The purpose a product name attests, or "" where it names no product."""
+    return split_service(name)[1]
 
 
 @lru_cache(maxsize=1)
@@ -465,6 +612,10 @@ def resolve_name(name: str) -> ResolvedName:
     key = merged_key(canonical_key(cleaned))
     if not key:
         return ResolvedName(canonical_key(raw), raw, "name")
+
+    operator, _ = split_service(cleaned)
+    if operator:
+        return resolve_name(operator)
 
     def resolved(display: str, basis: str, domain: str = "") -> ResolvedName:
         return ResolvedName(key, display, basis, domain, country_for(display))

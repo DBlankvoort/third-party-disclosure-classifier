@@ -216,3 +216,46 @@ class TestCorrections:
         assert not g.apply_edit({"op": "rename", "node": "entity::nobody",
                                  "display_name": "X"})
         assert not g.apply_edit({"op": "nonsense"})
+
+
+class TestPartyRoles:
+    def _graph(self):
+        from tpd.sharing_graph import (
+            SharingGraph,
+            add_target,
+            entity_node_id,
+            expand_node,
+        )
+
+        def rel(entity, **kw):
+            base = {"entity": entity, "party": "third", "unspecified": False,
+                    "data_type": "personal data", "action": "be_shared",
+                    "negative": False, "direction": "downstream", "purposes": [],
+                    "examples": [], "qualifier": "", "sources": ["policy"],
+                    "text": "", "doc_ids": []}
+            base.update(kw)
+            return base
+
+        g = SharingGraph()
+        add_target(g, "site", "site.example", [rel("Criteo")])
+        expand_node(g, entity_node_id("Criteo"),
+                    [rel("Adobe"), rel("A Publisher", direction="upstream")], hop=1)
+        return g
+
+    def test_a_disclosed_party_counts_as_a_recipient(self):
+        from tpd.sharing_graph import entity_node_id
+
+        roles = self._graph().party_roles()
+        assert entity_node_id("Criteo") in roles["recipients"]
+        assert entity_node_id("Adobe") in roles["recipients"]
+
+    def test_a_party_that_only_hands_data_in_counts_as_a_supplier(self):
+        from tpd.sharing_graph import entity_node_id
+
+        roles = self._graph().party_roles()
+        assert entity_node_id("A Publisher") in roles["suppliers"]
+        assert entity_node_id("A Publisher") not in roles["recipients"]
+
+    def test_the_two_roles_do_not_overlap(self):
+        roles = self._graph().party_roles()
+        assert not roles["recipients"] & roles["suppliers"]

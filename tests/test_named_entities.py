@@ -183,3 +183,30 @@ class TestDocumentParts:
 
     def test_a_company_whose_name_opens_with_such_a_word_survives(self):
         assert clean_ner_org("Schedule Management Systems") == "Schedule Management Systems"
+
+
+class TestEnumerationRuns:
+    def test_three_names_separated_by_commas_form_one_run(self):
+        from tpd.classify.named_entities import enumeration_runs
+
+        assert enumeration_runs(
+            "the data we acquire via Patreon, Kickstarter and Backerkit"
+        ) == [["Patreon", "Kickstarter", "Backerkit"]]
+
+    def test_a_pair_is_not_a_run(self):
+        from tpd.classify.named_entities import enumeration_runs
+
+        assert enumeration_runs("We work with Criteo and Adobe.") == []
+
+    def test_a_full_stop_closes_a_run(self):
+        from tpd.classify.named_entities import enumeration_runs
+
+        runs = enumeration_runs("Alpha, Bravo and Charlie. Delta, Echo and Foxtrot.")
+        assert runs == [["Alpha", "Bravo", "Charlie"], ["Delta", "Echo", "Foxtrot"]]
+
+    def test_a_lowercase_word_after_the_last_name_does_not_lose_the_run(self):
+        from tpd.classify.named_entities import enumeration_runs
+
+        assert enumeration_runs(
+            "via Alpha, Bravo and Charlie, and they each have policies"
+        ) == [["Alpha", "Bravo", "Charlie"]]

@@ -158,9 +158,16 @@ def _gvl_relations(raw: str, doc_id: str, source: str) -> list[dict]:
     return out
 
 
-def registry_relations(raw: str, doc_id: str = "") -> list[dict]:
+GRAPH_REGISTRY_KINDS = frozenset({"ads_txt", "tcf_gvl", "vendors_json"})
+ALL_REGISTRY_KINDS = GRAPH_REGISTRY_KINDS | {"sellers_json"}
+
+
+def registry_relations(raw: str, doc_id: str = "",
+                       kinds: frozenset[str] = GRAPH_REGISTRY_KINDS) -> list[dict]:
     """Relations declared by one machine-readable registry file."""
     kind = machine_readable_kind((raw or "")[:200_000])
+    if kind not in kinds:
+        return []
     if kind == "ads_txt":
         return _ads_txt_relations(raw, doc_id)
     if kind == "sellers_json":
@@ -308,6 +315,7 @@ def structured_relations_for_target(
     corpus,
     docs,
     first_party: set[str] | None = None,
+    registry_kinds: frozenset[str] = GRAPH_REGISTRY_KINDS,
 ) -> list[dict]:
     """Relations synthesized from every registry / table doc of one target."""
     out: list[dict] = []
@@ -316,7 +324,7 @@ def structured_relations_for_target(
             continue
         if d.role in MACHINE_READABLE_ROLES:
             raw = corpus.read_doc_html(d)
-            rels = registry_relations(raw, doc_id=d.doc_id)
+            rels = registry_relations(raw, doc_id=d.doc_id, kinds=registry_kinds)
             if first_party:
                 rels = [r for r in rels if not _is_first_party(r["entity"], first_party)]
             out.extend(rels)

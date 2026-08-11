@@ -39,8 +39,11 @@ class TestQualifiedNames:
     def test_parenthetical_product_is_stripped(self):
         assert resolve_entity_domain("Microsoft (Azure)")[0] == "microsoft.com"
 
+    def test_a_product_reaches_its_operators_site(self):
+        assert resolve_entity_domain("Google Cloud Platform (GCP)")[0] == "google.com"
+
     def test_prefix_resolution_is_recorded_as_such(self):
-        assert resolve_entity_domain("Google Cloud Platform (GCP)")[1] == "name_prefix"
+        assert resolve_entity_domain("Google Ireland Limited")[1] == "name_prefix"
 
     def test_a_prefix_reaching_no_curated_name_resolves_to_nothing(self):
         assert resolve_entity_domain("Nexmo Inc (aka Vonage)") == ("", "unresolved")
@@ -123,3 +126,81 @@ class TestResolutionFeedsExpansion:
 
     def test_a_shared_platform_is_not_a_party_home(self):
         assert resolve_entity_domain("cloudfront.net")[0] != "cloudfront.net"
+
+
+class TestServiceCanonicalisation:
+    def test_a_product_resolves_to_the_organisation_running_it(self):
+        from tpd.entities import resolve_name
+
+        for surface in ("Google Analytics", "Google Ads", "Google Tag Manager",
+                        "Google Cloud", "AdMob", "Firebase"):
+            assert resolve_name(surface).display == "Google", surface
+
+    def test_a_product_attests_the_purpose_the_data_serves(self):
+        from tpd.entities import service_purpose
+
+        assert service_purpose("Google Analytics") == "analytics"
+        assert service_purpose("Google Ads") == "advertising"
+        assert service_purpose("Amazon Web Services") == "services"
+        assert service_purpose("reCAPTCHA") == "security"
+
+    def test_a_product_of_a_product_composes(self):
+        from tpd.entities import resolve_name, service_purpose
+
+        assert resolve_name("Firebase Analytics").display == "Google"
+        assert service_purpose("Firebase Analytics") == "analytics"
+
+    def test_only_a_curated_operator_absorbs_a_product(self):
+        from tpd.entities import resolve_name
+
+        assert resolve_name("Acme Analytics").display != "Acme"
+        assert resolve_name("Captify Technologies").display != "Captify"
+
+    def test_a_tail_does_not_consume_the_name_it_trails(self):
+        from tpd.entities import split_service
+
+        for surface in ("Cloud", "Analytics", "Ads", "Web Services"):
+            assert split_service(surface) == ("", ""), surface
+
+    def test_a_service_publishing_its_own_notice_stays_a_party(self):
+        from tpd.entities import resolve_name
+
+        for surface in ("YouTube", "Instagram", "WhatsApp", "LinkedIn"):
+            assert resolve_name(surface).display == surface, surface
+
+    def test_an_unrelated_name_ending_in_a_tail_word_is_left_alone(self):
+        from tpd.entities import resolve_name
+
+        for surface in ("Social Media", "Improve Digital", "Index Exchange"):
+            assert resolve_name(surface).display == surface, surface
+
+    def test_the_product_surface_survives_as_an_alias(self):
+        from tpd.sharing_graph import SharingGraph, add_target, entity_node_id
+
+        rel = {"entity": "Google Analytics", "party": "third",
+               "unspecified": False, "data_type": "personal data",
+               "action": "be_shared", "negative": False,
+               "direction": "downstream", "purposes": [], "examples": [],
+               "qualifier": "", "sources": ["policy"], "text": "", "doc_ids": []}
+        g = SharingGraph()
+        add_target(g, "site", "site.example", [rel])
+        node = g.nodes[entity_node_id("Google")]
+        assert "Google Analytics" in node.aliases
+
+    def test_the_purpose_reaches_the_arrangement(self):
+        from tpd.sharing_graph import EdgeKind, SharingGraph, add_target
+
+        def rel(entity):
+            return {"entity": entity, "party": "third", "unspecified": False,
+                    "data_type": "personal data", "action": "be_shared",
+                    "negative": False, "direction": "downstream", "purposes": [],
+                    "examples": [], "qualifier": "", "sources": ["policy"],
+                    "text": "", "doc_ids": []}
+
+        g = SharingGraph()
+        add_target(g, "site", "site.example",
+                   [rel("Google Analytics"), rel("Google Ads")])
+        edge = next(e for e in g.edges.values()
+                    if e.kind is EdgeKind.DISCLOSES_SHARING_WITH)
+        purposes = {p for ev in edge.evidence for p in ev.purposes}
+        assert purposes == {"analytics", "advertising"}

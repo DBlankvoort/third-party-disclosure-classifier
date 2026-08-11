@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import threading
 import time
 import random
 from collections import OrderedDict
@@ -504,6 +505,108 @@ def render_corpus(
             if progress:
                 progress(target, f"rendered, {updated} doc(s) updated so far")
     return rendered, updated, failed
+
+
+# --------------------------------------------------------------------------- #
+# Rendering during an outward walk
+# --------------------------------------------------------------------------- #
+THIN_TEXT_SHARE = 0.02
+THIN_TEXT_CHARS = 400
+WALK_RENDER_TIMEOUT_MS = 12000
+WALK_RENDER_SETTLE_MS = 900
+
+_RENDERER_LOCAL = threading.local()
+_RENDERERS: list[Renderer] = []
+_RENDERERS_LOCK = threading.Lock()
+
+
+def walk_renderer() -> Renderer | None:
+    """A browser this thread may reuse across origins, started on first need."""
+    held = getattr(_RENDERER_LOCAL, "renderer", None)
+    if held is not None:
+        return held if held.available else None
+    renderer = Renderer(timeout_ms=WALK_RENDER_TIMEOUT_MS,
+                        settle_ms=WALK_RENDER_SETTLE_MS)
+    renderer.__enter__()
+    _RENDERER_LOCAL.renderer = renderer
+    with _RENDERERS_LOCK:
+        _RENDERERS.append(renderer)
+    return renderer if renderer.available else None
+
+
+def close_thread_renderer() -> None:
+    """Shut the browser this thread holds."""
+    renderer = getattr(_RENDERER_LOCAL, "renderer", None)
+    _RENDERER_LOCAL.renderer = None
+    if renderer is None:
+        return
+    with _RENDERERS_LOCK:
+        if renderer in _RENDERERS:
+            _RENDERERS.remove(renderer)
+    try:
+        renderer.__exit__(None, None, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def close_walk_renderers() -> None:
+    """Shut any browser still standing once a walk has finished."""
+    with _RENDERERS_LOCK:
+        held, _RENDERERS[:] = list(_RENDERERS), []
+    for renderer in held:
+        try:
+            renderer.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            pass
+    _RENDERER_LOCAL.renderer = None
+
+
+def _is_thin(html: str) -> bool:
+    """Whether a fetched document's markup arrived without its prose."""
+    if not html.strip():
+        return True
+    try:
+        text = parse_html(html, max_bytes=_USABILITY_MAX_BYTES).text
+    except Exception:  # noqa: BLE001
+        return False
+    return len(text) < THIN_TEXT_CHARS or len(text) / len(html) < THIN_TEXT_SHARE
+
+
+def render_thin_docs(
+    corpus: Corpus,
+    target: Target,
+    docs: list[CollectedDoc],
+    roles: set[str] | None = None,
+    progress=None,
+) -> int:
+    """Re-fetch this target's client-rendered documents with a browser."""
+    role_set = roles if roles is not None else JS_PRONE_ROLES
+    candidates = [d for d in docs
+                  if d.role in role_set and d.url and d.ok and not d.rendered]
+    if not candidates:
+        return 0
+    pending = []
+    for d in candidates:
+        if _is_thin(corpus.read_doc_html(d)):
+            pending.append(d)
+        else:
+            # Recorded so later rings do not re-parse a document already known
+            # to have arrived with its prose.
+            d.rendered = -1
+    updated = 0
+    renderer = walk_renderer() if pending else None
+    for d in pending if renderer is not None else ():
+        html = renderer.render(d.url)
+        d.rendered = -1
+        if html and not _is_thin(html):
+            corpus.save_doc(target.id, d, html)
+            d.fetched_at = time.time()
+            d.rendered = 1
+            updated += 1
+            if progress:
+                progress(target, f"rendered {d.role}")
+    corpus.write_manifest(target, docs)
+    return updated
 
 
 # Roles produced by the per-target augment steps folded into fetch_target.

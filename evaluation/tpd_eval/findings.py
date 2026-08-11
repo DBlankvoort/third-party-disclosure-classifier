@@ -17,7 +17,13 @@ from tpd.collect.base import Corpus
 from tpd.entities import known_to_kb
 from tpd.extract import parse_html
 from tpd.kb import gvl, tracker_radar
-from tpd.sharing_graph import EdgeKind, NodeType, SharingGraph, sharing_chains
+from tpd.sharing_graph import (
+    EdgeKind,
+    NodeType,
+    SharingGraph,
+    flow_hops,
+    sharing_chains,
+)
 from tpd.tracks import INVENTORY, PERSONAL_DATA, TRACKS
 
 TEXT_SHARE_FLOOR = 0.05
@@ -88,18 +94,25 @@ def graph_measures(graph: SharingGraph) -> dict:
             "disclosing_nothing_named": ring["silent"],
             "frontier": len(ring["frontier"]),
         }
+    deferred_ids = {nid for nid, n in graph.nodes.items() if n.deferred}
     hops = sorted(by_ring)
     for i, hop in enumerate(hops[:-1]):
         frontier = rings[hop]["frontier"]
         analysed = frontier & origins_by_hop.get(hops[i + 1], set())
+        deferred = (frontier & deferred_ids) - analysed
+        attempted = len(frontier) - len(deferred)
+        by_ring[hop]["deferred"] = len(deferred)
         by_ring[hop]["attrition_pct"] = (
-            round(100.0 * (1 - len(analysed) / len(frontier)), 1) if frontier else None
+            round(100.0 * (1 - len(analysed) / attempted), 1) if attempted else None
         )
 
+    roles = graph.party_roles()
     return {
         "nodes": len(graph.nodes),
         "nodes_by_type": {t.value: sum(1 for n in graph.nodes.values() if n.type is t)
                           for t in NodeType},
+        "recipients": len(roles["recipients"]),
+        "suppliers": len(roles["suppliers"]),
         "entities": len(entities),
         "entities_grounded": sum(1 for n in entities if n.grounded),
         "entities_ungrounded": sum(1 for n in entities if not n.grounded),
@@ -111,6 +124,50 @@ def graph_measures(graph: SharingGraph) -> dict:
         "edges_total": len(graph.edges),
         "rings": by_ring,
     }
+
+
+REACH_HOPS = 8
+
+
+def reach_measures(graph: SharingGraph) -> dict:
+    """Distinct parties reachable downstream of the seed."""
+    seed = next(
+        (nid for nid, n in graph.nodes.items()
+         if n.type is NodeType.TARGET and (n.hop_first_seen or 0) == 0),
+        None,
+    )
+    collected = max(
+        (n.hop_first_seen or 0 for n in graph.nodes.values() if n.expanded),
+        default=0,
+    )
+    out = {"seed": "", "collected_depth": collected, "hops": REACH_HOPS,
+           "by_track": {}}
+    if seed is None:
+        return out
+    out["seed"] = graph.nodes[seed].display_name
+    named = {nid for nid, n in graph.nodes.items()
+             if n.type in (NodeType.TARGET, NodeType.ENTITY)}
+    for track in TRACKS:
+        adjacency = flow_hops(graph, track=track)
+        seen, frontier, series = {seed}, {seed}, []
+        for _ in range(REACH_HOPS):
+            nxt = {h.dst for nid in frontier for h in adjacency.get(nid, ())
+                   if h.dst in named and h.dst not in seen}
+            seen |= nxt
+            frontier = nxt
+            series.append(len(seen) - 1)
+            if not nxt:
+                break
+        closes = next(
+            (i + 1 for i in range(1, len(series)) if series[i] == series[i - 1]),
+            None,
+        )
+        out["by_track"][track] = {
+            "by_hop": series,
+            "total": series[-1] if series else 0,
+            "closes_at": closes,
+        }
+    return out
 
 
 def _source_families(edge) -> set[str]:
@@ -344,6 +401,7 @@ def measure(
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "origin": origin,
         "graph": graph_measures(graph),
+        "reach": reach_measures(graph),
         "corroboration": {t: corroboration(graph, track=t) for t in TRACKS},
         "chains": chain_measures(graph),
         "vocabulary": vocabulary_measures(graph),
@@ -401,7 +459,7 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
     ring_rows = [
         [f"ring {hop}", r["origins"], r["named_out_degree"]["mean"],
          r["named_out_degree"]["median"], r["named_out_degree"]["max"],
-         r["disclosing_nothing_named"], r["frontier"],
+         r["disclosing_nothing_named"], r["frontier"], r.get("deferred", 0),
          "—" if r.get("attrition_pct") is None else f"{r['attrition_pct']}%"]
         for hop, r in sorted(g["rings"].items())
     ]
@@ -430,24 +488,33 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
   <section>
     <h2>What the walk reaches</h2>
     <div class="tiles">
-      {_stat_tile(g['nodes'], 'nodes')}
-      {_stat_tile(g['entities'], 'named organisations')}
+      {_stat_tile(g['recipients'], 'parties data reaches',
+                  'a disclosure names them as a recipient')}
+      {_stat_tile(g['suppliers'], 'parties that supply',
+                  'a disclosure names them as a source')}
       {_stat_tile(g['edges_by_track'][PERSONAL_DATA], 'personal-data arrangements',
                   track="pd")}
       {_stat_tile(g['edges_by_track'][INVENTORY], 'inventory authorisations',
                   track="inv")}
     </div>
     <p>
-      Of the arrangements in the graph,
+      The graph holds {_fmt(g['nodes'])} nodes and {_fmt(g['entities'])} named
+      organisations. Of its arrangements,
       <strong>{_pct(g['edges_by_track'][INVENTORY], g['edges_total'])}%</strong>
       are inventory authorisations.
     </p>
     {_table(
         ["", "origins analysed", "named out-degree (mean)", "median", "max",
-         "disclosing nothing named", "next frontier", "attrition"],
+         "disclosing nothing named", "next frontier", "budget deferred",
+         "attrition"],
         ring_rows,
     )}
     {_attrition_note(g['rings'])}
+  </section>
+
+  <section>
+    <h2>How far the data travels</h2>
+    {_reach_section(m.get('reach') or {})}
   </section>
 
   <section>
@@ -508,6 +575,12 @@ def _attrition_note(rings: dict) -> str:
     if not series:
         return ""
     stated = ", ".join(f"ring {hop} → {pct}%" for hop, pct in series)
+    deferred = sum(r.get("deferred", 0) for r in rings.values())
+    budget = (
+        f" A further {deferred:,} parties were reached once their ring's budget "
+        "was spent."
+        if deferred else ""
+    )
     if len(series) < 2:
         trend = (
             "Not enough data to comment on attrition."
@@ -533,8 +606,65 @@ def _attrition_note(rings: dict) -> str:
             )
     return (
         f"<p>Ring attrition: "
-        f"{stated}. {trend}</p>"
+        f"{stated}. {trend}{budget}</p>"
     )
+
+
+def _rings(n: int) -> str:
+    return f"{n:,} ring" + ("" if n == 1 else "s")
+
+
+def _reach_section(reach: dict) -> str:
+    """Downstream reach by hop against depth."""
+    tracks = reach.get("by_track") or {}
+    if not reach.get("seed") or not tracks:
+        return ('<p class="aside">No seed target was walked for this page.</p>')
+    pd = tracks.get(PERSONAL_DATA, {})
+    inv = tracks.get(INVENTORY, {})
+    depth = max(len(t.get("by_hop") or ()) for t in tracks.values())
+    rows = [
+        [f"{hop} hop" + ("" if hop == 1 else "s"),
+         (pd.get("by_hop") or [None] * depth)[hop - 1]
+         if hop <= len(pd.get("by_hop") or ()) else "—",
+         (inv.get("by_hop") or [None] * depth)[hop - 1]
+         if hop <= len(inv.get("by_hop") or ()) else "—"]
+        for hop in range(1, depth + 1)
+    ]
+    collected = reach.get("collected_depth") or 0
+    closes = pd.get("closes_at")
+    if closes is None:
+        settles = (
+            "The personal-data reachable set is still growing at the last hop "
+            "measured."
+        )
+    elif closes > collected:
+        settles = (
+            f"The personal-data reachable set settles at hop {closes}. The walk "
+            f"collected {_rings(collected)}, and a party outside those carries "
+            f"no onward arrangements, so hop {closes} is the depth at which the "
+            "collection ran out. A claim about where the sharing itself ends "
+            "needs a walk collected at least that deep."
+        )
+    else:
+        settles = (
+            f"The personal-data reachable set settles at hop {closes}, within "
+            f"the {_rings(collected)} the walk collected, so the settling "
+            "follows from the arrangements read."
+        )
+    return f"""
+    <div class="tiles">
+      {_stat_tile(pd.get('total', 0), 'parties reached downstream', track="pd")}
+      {_stat_tile(inv.get('total', 0), 'reached by inventory authorisation',
+                  track="inv")}
+      {_stat_tile(collected, 'rings collected')}
+    </div>
+    <p>
+      Distinct parties reachable from <code>{_e(reach['seed'])}</code> along
+      arrangements followed in the direction the data moves, counted once each
+      and restricted to arrangements whose evidence sits on the track measured.
+    </p>
+    {_table(["", "personal data", "ad inventory"], rows)}
+    <p>{settles}</p>"""
 
 
 def _opacity_section(corpus: dict) -> str:

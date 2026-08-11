@@ -29,7 +29,6 @@
     <section id="result" hidden>
       <!-- Headline -->
       <div id="headline" class="headline">
-        <span id="class-pill" class="pill">—</span>
         <span id="source-pill" class="pill subtle"></span>
       </div>
 
@@ -38,7 +37,7 @@
           <h2 class="section-title">Where disclosures were found</h2>
           <ul id="docs" class="docs"></ul>
           <p id="docs-empty" class="empty" hidden>
-            No recognised disclosure document was found at this origin.
+            No document naming a third party was found at this origin.
           </p>
 
           <h2 class="section-title">What they disclose, in aggregate</h2>
@@ -62,31 +61,37 @@
           <p id="relations-off" class="empty" hidden>
             PoliGraph analysis is disabled on the local bridge.
           </p>
-          <details id="firstparty-box" class="rollup" hidden>
-            <summary>First-party collection <span id="firstparty-count" class="count">0</span></summary>
-            <div id="firstparty" class="taglist"></div>
-          </details>
+          <ul id="observed-box" class="relations" hidden>
+            <li class="rel-card">
+              <div class="rel-entity">
+                <span class="rel-name plain">Contacted by this page</span>
+                <span id="observed-count" class="rel-examples"></span>
+              </div>
+              <p id="undisclosed-note" class="empty tight" hidden></p>
+              <div id="observed" class="taglist tight"></div>
+            </li>
+          </ul>
 
-          <details id="observed-box" class="rollup" hidden>
-            <summary>Contacted by this page <span id="observed-count" class="count">0</span></summary>
-            <p id="undisclosed-note" class="empty" hidden></p>
-            <div id="observed" class="taglist"></div>
-          </details>
+          <ul id="firstparty-box" class="relations" hidden>
+            <li class="rel-card">
+              <div class="rel-entity">
+                <span class="rel-name plain">First-party collection</span>
+                <span id="firstparty-count" class="rel-examples"></span>
+              </div>
+              <div id="firstparty" class="taglist tight"></div>
+            </li>
+          </ul>
 
-          <details id="cmp-box" class="rollup" hidden>
-            <summary>Named by the consent dialog <span id="cmp-count" class="count">0</span></summary>
-            <p id="cmp-note" class="empty" hidden></p>
-            <div id="cmp" class="taglist"></div>
-          </details>
-
-          <details id="orgs-box" class="rollup">
-            <summary>Named organisations <span id="orgs-count" class="count">0</span></summary>
-            <div id="orgs" class="taglist"></div>
-          </details>
-          <details id="cats-box" class="rollup">
-            <summary>Role / categories disclosed <span id="cats-count" class="count">0</span></summary>
-            <div id="cats" class="taglist"></div>
-          </details>
+          <ul id="cmp-box" class="relations" hidden>
+            <li class="rel-card">
+              <div class="rel-entity">
+                <span class="rel-name plain">Named by the consent dialog</span>
+                <span id="cmp-count" class="rel-examples"></span>
+              </div>
+              <p id="cmp-note" class="empty tight" hidden></p>
+              <div id="cmp" class="taglist tight"></div>
+            </li>
+          </ul>
         </div>
 
         <div class="col">
@@ -99,9 +104,6 @@
           <button id="open-graph" class="rbtn primary wide">
             Explore the network ↗
           </button>
-          <p class="empty tight">
-            Follows each party to its own disclosures.
-          </p>
 
           <h2 class="section-title">Your rights</h2>
           <div id="rights" class="rights"></div>
@@ -115,11 +117,6 @@
       <pre>python firefox-extension/server/server.py</pre>
     </section>
   </main>
-
-  <footer>
-    <span class="legend"><i class="dot on"></i> discloses third parties</span>
-    <span class="legend"><i class="dot"></i> recognised, none found</span>
-  </footer>
 
   <script src="popup.js"></script>
 </body>

@@ -369,6 +369,54 @@ def frame_named_orgs(text: str) -> list[str]:
             emit(" ".join(head))
     return out
 
+
+_ENUM_SEP_RE = re.compile(r"[ \t]*(?:,[ \t]*(?:and[ \t]+|or[ \t]+)?|"
+                          r"and[ \t]+|or[ \t]+|&[ \t]*)")
+MIN_ENUM_MEMBERS = 3
+_MAX_ENUM_MEMBERS = 60
+_MAX_ENUM_NAME_TOKENS = 5
+
+
+def enumeration_runs(text: str) -> list[list[str]]:
+    """Comma- or conjunction-separated runs of three or more proper names."""
+    runs: list[list[str]] = []
+    current: list[str] = []
+    pos, n = 0, len(text)
+
+    def flush() -> None:
+        nonlocal current
+        if MIN_ENUM_MEMBERS <= len(current) <= _MAX_ENUM_MEMBERS:
+            runs.append(current)
+        current = []
+
+    while pos < n:
+        m = _TOKEN_RE.match(text, pos)
+        if m is None:
+            flush()
+            pos += 1
+            continue
+        if not _name_token(m.group(0)):
+            flush()
+            pos = m.end()
+            continue
+        group = [m.group(0)]
+        pos = m.end()
+        while len(group) < _MAX_ENUM_NAME_TOKENS and pos < n and text[pos] == " ":
+            nxt = _TOKEN_RE.match(text, pos + 1)
+            if nxt is None or not _name_token(nxt.group(0)):
+                break
+            group.append(nxt.group(0))
+            pos = nxt.end()
+        current.append(" ".join(group))
+        sep = _ENUM_SEP_RE.match(text, pos)
+        if sep is not None and sep.end() > pos:
+            pos = sep.end()
+            continue
+        flush()
+    flush()
+    return runs
+
+
 _MIN_BRAND_TOKEN = 3
 
 

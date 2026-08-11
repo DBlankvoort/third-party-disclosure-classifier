@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from dataclasses import fields as dc_fields
 from pathlib import Path
 
 import requests
@@ -61,6 +62,7 @@ class CollectedDoc:
     raw_path: str = ""    # path (relative to corpus root) of saved bytes
     fetched_at: float = 0.0
     error: str = ""
+    rendered: int = 0
 
     @property
     def ok(self) -> bool:
@@ -128,7 +130,9 @@ class Corpus:
         d = self.root / target_id / "manifest.json"
         data = json.loads(d.read_text(encoding="utf-8"))
         target = Target(**data["target"])
-        docs = [CollectedDoc(**x) for x in data["docs"]]
+        known = {f.name for f in dc_fields(CollectedDoc)}
+        docs = [CollectedDoc(**{k: v for k, v in x.items() if k in known})
+                for x in data["docs"]]
         return target, docs
 
     def list_targets(self) -> list[str]:

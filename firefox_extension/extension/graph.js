@@ -40,11 +40,15 @@ const SUBJECT_LABEL = {
 
 const $ = (id) => document.getElementById(id);
 
+const HIT_CELL = 140;
+const HIT_GRID_SPAN = 120;
+
 // ---------------------------------------------------------------- state ---
 const state = {
   origin: "",
   tabId: null,
   hops: 1,
+  timeLimit: 0,
   jobId: null,
   polling: null,
   running: false,
@@ -58,6 +62,10 @@ const state = {
   hovered: null,
   matches: new Set(),
   view: { x: 0, y: 0, k: 1 },
+  minK: 0.05,
+  render: null,
+  grid: null,
+  gridCell: HIT_CELL,
   track: "personal_data",
   filters: {
     policy: true, registry: true, traffic: true, generic: true, domains: false,
@@ -254,6 +262,91 @@ function nodeRadius(id) {
   return Math.min(7, 3.4 + Math.sqrt(out) * 0.7);
 }
 
+function nodeFill(node) {
+  if (node.type === "entity" && node.grounded === false) return UNGROUNDED_COLOR;
+  return NODE_COLOR[node.type] || "#9aa0b0";
+}
+
+// ---------------------------------------------------- draw-ready geometry ---
+
+function buildRenderModel() {
+  const nodes = [];
+  const index = new Map();
+  for (const [id, p] of state.layout) {
+    const node = state.byId.get(id);
+    if (!node) continue;
+    index.set(id, nodes.length);
+    nodes.push({
+      id,
+      x: p.x,
+      y: p.y,
+      r: nodeRadius(id),
+      fill: nodeFill(node),
+      unexpanded: node.type !== "domain" && terminationOf(id) === "unexpanded",
+      name: truncate(node.display_name || node.id, 24),
+      hop: p.hop,
+      wedge: (p.a1 - p.a0) * Math.hypot(p.x, p.y),
+    });
+  }
+
+  const edges = [];
+  for (const e of state.graph.edges) {
+    const a = state.layout.get(e.src);
+    const b = state.layout.get(e.dst);
+    if (!a || !b || !edgePasses(e)) continue;
+    const sources = edgeSources(e);
+    let colour = "#5b6478";
+    for (const s of sources) { colour = SOURCE_COLOR[s] || colour; break; }
+    edges.push({
+      src: e.src, dst: e.dst,
+      x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      lo: Math.min(a.x, b.x), hi: Math.max(a.x, b.x),
+      top: Math.min(a.y, b.y), bot: Math.max(a.y, b.y),
+      colour,
+      tree: isTreeEdge(e),
+    });
+  }
+
+  const colours = new Map();
+  edges.forEach((e, i) => {
+    if (!colours.has(e.colour)) colours.set(e.colour, []);
+    colours.get(e.colour).push(i);
+  });
+  const fills = new Map();
+  nodes.forEach((n, i) => {
+    if (!fills.has(n.fill)) fills.set(n.fill, []);
+    fills.get(n.fill).push(i);
+  });
+
+  let extent = 1;
+  const rings = new Map();
+  for (const n of nodes) {
+    const radius = Math.hypot(n.x, n.y);
+    extent = Math.max(extent, radius);
+    if (n.hop) rings.set(n.hop, radius);
+  }
+
+  state.render = {
+    nodes, index, edges, colours, fills, extent,
+    rings: [...rings.values()],
+  };
+  state.minK = fitScale() * 0.4;
+  buildHitGrid(nodes, extent);
+}
+
+function buildHitGrid(nodes, extent) {
+  const size = Math.max(HIT_CELL, (2 * extent) / HIT_GRID_SPAN);
+  const grid = new Map();
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const key = `${Math.floor(n.x / size)},${Math.floor(n.y / size)}`;
+    const cell = grid.get(key);
+    if (cell) cell.push(i); else grid.set(key, [i]);
+  }
+  state.grid = grid;
+  state.gridCell = size;
+}
+
 // ---------------------------------------------------------------- canvas ---
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
@@ -283,15 +376,16 @@ function screenToWorld(sx, sy) {
   };
 }
 
-function fit() {
+function fitScale() {
   const rect = canvas.getBoundingClientRect();
-  let maxR = 1;
-  for (const p of state.layout.values()) {
-    maxR = Math.max(maxR, Math.hypot(p.x, p.y));
-  }
+  const extent = (state.render && state.render.extent) || 1;
+  return Math.min(rect.width, rect.height) / (2 * extent + 90);
+}
+
+function fit() {
   state.view.x = 0;
   state.view.y = 0;
-  state.view.k = Math.min(rect.width, rect.height) / (2 * maxR + 90);
+  state.view.k = fitScale();
   draw();
 }
 
@@ -304,139 +398,219 @@ function highlightSet() {
   return set;
 }
 
+const RING_STROKE = "rgba(255,255,255,.055)";
+const CROSS_EDGE_CEILING = 500;
+const MAX_LABELS = 400;
+const LABEL_CELL = 24;
+
+let pendingFrame = 0;
+
 function draw() {
+  if (pendingFrame) return;
+  pendingFrame = requestAnimationFrame(() => { pendingFrame = 0; paint(); });
+}
+
+function paint() {
   const rect = canvas.getBoundingClientRect();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  if (!state.layout.size) return;
+  const model = state.render;
+  if (!model || !model.nodes.length) return;
+
+  const k = state.view.k;
+  const vx = state.view.x;
+  const vy = state.view.y;
+  const ox = rect.width / 2;
+  const oy = rect.height / 2;
+  const sx = (x) => ox + (x + vx) * k;
+  const sy = (y) => oy + (y + vy) * k;
+
+  const pad = 60 / k;
+  const wx0 = -vx - ox / k - pad;
+  const wx1 = -vx + ox / k + pad;
+  const wy0 = -vy - oy / k - pad;
+  const wy1 = -vy + oy / k + pad;
 
   const focus = highlightSet();
-  const k = state.view.k;
+  const cx = sx(0);
+  const cy = sy(0);
 
   // Hop rings.
-  const centre = worldToScreen({ x: 0, y: 0 });
-  const hops = new Set([...state.layout.values()].map((p) => p.hop));
-  ctx.strokeStyle = "rgba(255,255,255,.055)";
+  ctx.strokeStyle = RING_STROKE;
   ctx.lineWidth = 1;
-  const ringRadius = new Map();
-  for (const p of state.layout.values()) {
-    if (p.hop) ringRadius.set(p.hop, Math.hypot(p.x, p.y));
+  ctx.beginPath();
+  for (const radius of model.rings) {
+    ctx.moveTo(cx + radius * k, cy);
+    ctx.arc(cx, cy, radius * k, 0, Math.PI * 2);
   }
-  for (const hop of hops) {
-    if (!hop) continue;
-    ctx.beginPath();
-    ctx.arc(centre.x, centre.y, ringRadius.get(hop) * k, 0, Math.PI * 2);
+  ctx.stroke();
+
+  drawEdges(model, { k, sx, sy, cx, cy, wx0, wx1, wy0, wy1, focus });
+  const labelled = drawNodes(model, { k, sx, sy, wx0, wx1, wy0, wy1, focus });
+  drawLabels(labelled, rect, k);
+}
+
+function drawEdges(model, v) {
+  const { k, sx, sy, cx, cy, focus } = v;
+  const total = model.edges.length;
+  if (!total) return;
+  const showCross = total < CROSS_EDGE_CEILING || k > 0.55;
+  const baseAlpha = Math.max(0.05, Math.min(0.34, 260 / total));
+  ctx.lineWidth = Math.max(0.4, Math.min(1.5, k * 1.6));
+
+  const focused = [];
+  for (const [colour, indices] of model.colours) {
+    let started = false;
+    for (const i of indices) {
+      const e = model.edges[i];
+      if (e.hi < v.wx0 || e.lo > v.wx1 || e.bot < v.wy0 || e.top > v.wy1) continue;
+      if (focus) {
+        if (focus.has(e.src) && focus.has(e.dst)) { focused.push(i); continue; }
+        if (!e.tree) continue;
+      } else if (!e.tree && !showCross) {
+        continue;
+      }
+      if (!started) { ctx.beginPath(); started = true; }
+      traceEdge(e, sx, sy, cx, cy);
+    }
+    if (!started) continue;
+    ctx.globalAlpha = focus ? baseAlpha * 0.3 : baseAlpha;
+    ctx.strokeStyle = colour;
     ctx.stroke();
   }
 
-  // Edges
-  const drawn = state.graph.edges.filter(
-    (e) => state.layout.has(e.src) && state.layout.has(e.dst) && edgePasses(e),
-  );
-  const showCross = drawn.length < 500 || k > 0.55;
-  const baseAlpha = Math.max(0.05, Math.min(0.34, 260 / drawn.length));
-  // A selection's lines thin out as they multiply.
-  const focusCount = focus
-    ? drawn.filter((e) => focus.has(e.src) && focus.has(e.dst)).length : 0;
-  const focusAlpha = Math.max(0.1, Math.min(0.95, 150 / Math.max(1, focusCount)));
-  ctx.lineWidth = Math.max(0.4, Math.min(1.5, k * 1.6));
-  for (const e of drawn) {
-    const tree = isTreeEdge(e);
-    const touchesFocus = focus && focus.has(e.src) && focus.has(e.dst);
-    if (!touchesFocus && !(tree || showCross)) continue;
-    // Thousands of faint lines stack into a solid wash.
-    if (focus && !touchesFocus && !tree) continue;
-    const p1 = worldToScreen(state.layout.get(e.src));
-    const p2 = worldToScreen(state.layout.get(e.dst));
-    const sources = [...edgeSources(e)];
-    ctx.strokeStyle = SOURCE_COLOR[sources[0]] || "#5b6478";
-    if (focus) ctx.globalAlpha = touchesFocus ? focusAlpha : baseAlpha * 0.3;
-    else ctx.globalAlpha = baseAlpha;
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    if (tree) {
-      ctx.lineTo(p2.x, p2.y);
-    } else {
-      // A link between rings is bent toward the middle.
-      ctx.quadraticCurveTo(
-        (p1.x + p2.x) / 2 * 0.65 + centre.x * 0.35,
-        (p1.y + p2.y) / 2 * 0.65 + centre.y * 0.35,
-        p2.x, p2.y,
-      );
+  if (focused.length) {
+    ctx.globalAlpha = Math.max(0.1, Math.min(0.95, 150 / focused.length));
+    let colour = "";
+    for (const i of focused) {
+      const e = model.edges[i];
+      if (e.colour !== colour) {
+        if (colour) ctx.stroke();
+        colour = e.colour;
+        ctx.strokeStyle = colour;
+        ctx.beginPath();
+      }
+      traceEdge(e, sx, sy, cx, cy);
     }
-    ctx.stroke();
+    if (colour) ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function traceEdge(e, sx, sy, cx, cy) {
+  const x1 = sx(e.x1), y1 = sy(e.y1), x2 = sx(e.x2), y2 = sy(e.y2);
+  ctx.moveTo(x1, y1);
+  if (e.tree) {
+    ctx.lineTo(x2, y2);
+    return;
+  }
+  // A link between rings is bent toward the middle.
+  ctx.quadraticCurveTo(
+    (x1 + x2) / 2 * 0.65 + cx * 0.35,
+    (y1 + y2) / 2 * 0.65 + cy * 0.35,
+    x2, y2,
+  );
+}
+
+function drawNodes(model, v) {
+  const { k, sx, sy, focus } = v;
+  const scale = Math.min(1.4, Math.max(0.3, k));
+  const labelled = [];
+  const rings = [];
+  const marked = [];
+
+  for (const pass of focus ? [false, true] : [true]) {
+    for (const [colour, indices] of model.fills) {
+      let started = false;
+      for (const i of indices) {
+        const n = model.nodes[i];
+        if (n.x < v.wx0 || n.x > v.wx1 || n.y < v.wy0 || n.y > v.wy1) continue;
+        const match = state.matches.has(n.id);
+        const lit = !focus || focus.has(n.id) || match;
+        if (lit !== pass) continue;
+        const r = Math.max(0.9, n.r * scale);
+        if (!started) { ctx.beginPath(); started = true; }
+        ctx.moveTo(sx(n.x) + r, sy(n.y));
+        ctx.arc(sx(n.x), sy(n.y), r, 0, Math.PI * 2);
+        if (n.unexpanded && lit) rings.push([sx(n.x), sy(n.y), r]);
+        if (n.id === state.selected || match) {
+          marked.push([sx(n.x), sy(n.y), r, match]);
+        }
+        if (match || n.id === state.selected || n.id === state.hovered
+            || n.hop === 0 || n.wedge * k > 13) {
+          labelled.push([n, sx(n.x), sy(n.y), r, !lit]);
+        }
+      }
+      if (!started) continue;
+      ctx.globalAlpha = pass ? 1 : 0.18;
+      ctx.fillStyle = colour;
+      ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
 
-  // Nodes.
-  const labelled = [];
-  for (const [id, p] of state.layout) {
-    const node = state.byId.get(id);
-    if (!node) continue;
-    const s = worldToScreen(p);
-    if (s.x < -40 || s.y < -40 || s.x > rect.width + 40 || s.y > rect.height + 40) continue;
-    const r = Math.max(0.9, nodeRadius(id) * Math.min(1.4, Math.max(0.3, k)));
-    const dim = focus && !focus.has(id);
-    const match = state.matches.has(id);
-
-    ctx.globalAlpha = dim && !match ? 0.18 : 1;
+  if (rings.length) {
+    ctx.strokeStyle = "rgba(240,179,91,.75)";
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = (node.type === "entity" && node.grounded === false)
-      ? UNGROUNDED_COLOR : (NODE_COLOR[node.type] || "#9aa0b0");
-    ctx.fill();
-    if (terminationOf(id) === "unexpanded" && node.type !== "domain") {
-      ctx.strokeStyle = "rgba(240,179,91,.75)";
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, r + 2.2, 0, Math.PI * 2);
-      ctx.stroke();
+    for (const [x, y, r] of rings) {
+      ctx.moveTo(x + r + 2.2, y);
+      ctx.arc(x, y, r + 2.2, 0, Math.PI * 2);
     }
-    if (id === state.selected || match) {
-      ctx.strokeStyle = match ? "#f0b35b" : "#ffffff";
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, r + 4, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-
-    const wedge = (p.a1 - p.a0) * Math.hypot(p.x, p.y) * k;
-    if (match || id === state.selected || id === state.hovered ||
-        p.hop === 0 || wedge > 13) {
-      labelled.push([id, s, r, dim && !match]);
-    }
+    ctx.stroke();
   }
+  for (const [x, y, r, match] of marked) {
+    ctx.strokeStyle = match ? "#f0b35b" : "#ffffff";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  return labelled;
+}
 
+function drawLabels(labelled, rect, k) {
+  if (!labelled.length) return;
   ctx.font = "11px Inter, system-ui, sans-serif";
   ctx.textBaseline = "middle";
-  labelled.sort((a, b) => b[2] - a[2]);
-  const placed = [];
-  const clear = (box) => !placed.some(
-    (q) => box.x < q.x + q.w && box.x + box.w > q.x
-      && box.y < q.y + q.h && box.y + box.h > q.y,
-  );
-  for (const [id, s, r, dim] of labelled) {
-    const node = state.byId.get(id);
-    const p = state.layout.get(id);
-    const left = Math.abs(Math.atan2(p.y, p.x)) > Math.PI / 2 && p.hop > 0;
-    const text = truncate(node.display_name || node.id, 24);
-    ctx.textAlign = p.hop === 0 ? "center" : (left ? "right" : "left");
-    const dx = p.hop === 0 ? 0 : (left ? -(r + 6) : r + 6);
-    const dy = p.hop === 0 ? -(r + 11) : 0;
-    const w = ctx.measureText(text).width;
-    const bx = ctx.textAlign === "center" ? s.x - w / 2
-      : (ctx.textAlign === "right" ? s.x + dx - w : s.x + dx);
-    const box = { x: bx - 2, y: s.y + dy - 8, w: w + 4, h: 16 };
-    const forced = id === state.selected || id === state.hovered
-      || state.matches.has(id) || p.hop === 0;
-    if (!forced && !clear(box)) continue;
-    placed.push(box);
+  labelled.sort((a, b) => b[3] - a[3]);
+
+  const taken = new Set();
+  const cells = (box) => {
+    const out = [];
+    const x0 = Math.floor(box.x / LABEL_CELL);
+    const x1 = Math.floor((box.x + box.w) / LABEL_CELL);
+    const y0 = Math.floor(box.y / LABEL_CELL);
+    const y1 = Math.floor((box.y + box.h) / LABEL_CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) out.push(`${cx},${cy}`);
+    }
+    return out;
+  };
+
+  let placed = 0;
+  for (const [n, x, y, r, dim] of labelled) {
+    if (placed >= MAX_LABELS) break;
+    const forced = n.id === state.selected || n.id === state.hovered
+      || state.matches.has(n.id) || n.hop === 0;
+    const left = Math.abs(Math.atan2(n.y, n.x)) > Math.PI / 2 && n.hop > 0;
+    ctx.textAlign = n.hop === 0 ? "center" : (left ? "right" : "left");
+    const dx = n.hop === 0 ? 0 : (left ? -(r + 6) : r + 6);
+    const dy = n.hop === 0 ? -(r + 11) : 0;
+    const w = ctx.measureText(n.name).width;
+    const bx = ctx.textAlign === "center" ? x - w / 2
+      : (ctx.textAlign === "right" ? x + dx - w : x + dx);
+    const box = { x: bx - 2, y: y + dy - 8, w: w + 4, h: 16 };
+    if (box.x > rect.width || box.x + box.w < 0) continue;
+    const keys = cells(box);
+    if (!forced && keys.some((key) => taken.has(key))) continue;
+    for (const key of keys) taken.add(key);
+    placed++;
     ctx.globalAlpha = dim ? 0.25 : 1;
     ctx.fillStyle = "rgba(20,22,28,.8)";
     ctx.fillRect(box.x, box.y, box.w, box.h);
-    ctx.fillStyle = p.hop === 0 ? "#ffffff" : "#c9cedd";
-    ctx.fillText(text, s.x + dx, s.y + dy);
+    ctx.fillStyle = n.hop === 0 ? "#ffffff" : "#c9cedd";
+    ctx.fillText(n.name, x + dx, y + dy);
   }
   ctx.globalAlpha = 1;
 }
@@ -445,14 +619,30 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
-function nodeAt(sx, sy) {
+function nodeAt(px, py) {
+  const model = state.render;
+  if (!model || !state.grid) return null;
+  const world = screenToWorld(px, py);
+  const k = state.view.k;
+  const reach = 16 / k;
+  const size = state.gridCell || HIT_CELL;
   let best = null;
   let bestD = 16;
-  for (const [id, p] of state.layout) {
-    const s = worldToScreen(p);
-    const d = Math.hypot(s.x - sx, s.y - sy);
-    const r = Math.max(4, nodeRadius(id) * Math.min(1.4, Math.max(0.45, state.view.k)));
-    if (d < Math.max(r + 4, 7) && d < bestD) { best = id; bestD = d; }
+  const x0 = Math.floor((world.x - reach) / size);
+  const x1 = Math.floor((world.x + reach) / size);
+  const y0 = Math.floor((world.y - reach) / size);
+  const y1 = Math.floor((world.y + reach) / size);
+  for (let cx = x0; cx <= x1; cx++) {
+    for (let cy = y0; cy <= y1; cy++) {
+      const cell = state.grid.get(`${cx},${cy}`);
+      if (!cell) continue;
+      for (const i of cell) {
+        const n = model.nodes[i];
+        const d = Math.hypot((n.x - world.x) * k, (n.y - world.y) * k);
+        const r = Math.max(4, n.r * Math.min(1.4, Math.max(0.45, k)));
+        if (d < Math.max(r + 4, 7) && d < bestD) { best = n.id; bestD = d; }
+      }
+    }
   }
   return best;
 }
@@ -497,7 +687,8 @@ canvas.addEventListener("wheel", (ev) => {
   const rect = canvas.getBoundingClientRect();
   const before = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
   const factor = Math.exp(-ev.deltaY * 0.0016);
-  state.view.k = Math.max(0.05, Math.min(14, state.view.k * factor));
+  const floor = Math.min(0.05, state.minK);
+  state.view.k = Math.max(floor, Math.min(14, state.view.k * factor));
   const after = screenToWorld(ev.clientX - rect.left, ev.clientY - rect.top);
   state.view.x += after.x - before.x;
   state.view.y += after.y - before.y;
@@ -797,7 +988,7 @@ function renderLegend() {
     [SOURCE_COLOR.policy, "stated in a policy", ""],
     [SOURCE_COLOR.registry, "named in a registry", ""],
     [SOURCE_COLOR.traffic, "observed in traffic", ""],
-    ["", "not analysed (walk stopped)", "ring"],
+    ["", "not analysed", "ring"],
   ];
   for (const [colour, text, cls] of rows) {
     const row = document.createElement("div");
@@ -810,81 +1001,33 @@ function renderLegend() {
   }
 }
 
-function carriesUpstreamData(subjects) {
-  if (!subjects.size) return true;
-  if (subjects.has("service_data") || subjects.has("not_applicable")) return true;
-  return subjects.has("unknown");
-}
-
-function countChainsOnTrack(track, parties, limit) {
-  const adjacency = new Map();
-  const owners = new Map();
-  for (const e of state.graph.edges) {
-    if (e.kind === "owned_by") owners.set(e.src, e.dst);
-  }
-  for (const e of state.graph.edges) {
-    if (!edgePasses(e)) continue;
-    const positive = (e.evidence || []).filter(
-      (ev) => !ev.negative && (ev.track || "personal_data") === track,
-    );
-    if (!positive.length) continue;
-    let src = e.src;
-    let dst = e.dst;
-    if (e.kind === "contacts") dst = owners.get(e.dst) || "";
-    else if (e.kind !== "discloses_sharing_with" && e.kind !== "supplies") continue;
-    if (!dst || src === dst) continue;
-    const node = state.byId.get(dst);
-    const from = state.byId.get(src);
-    if (!node || !from) continue;
-    if (!["entity", "target"].includes(node.type)) continue;
-    if (!["entity", "target"].includes(from.type)) continue;
-    if (!adjacency.has(src)) adjacency.set(src, new Map());
-    adjacency.get(src).set(dst, new Set(positive.map((ev) => ev.subject).filter(Boolean)));
-  }
-  let found = 0;
-  let steps = 60000;
-  const walk = (path) => {
-    if (found >= limit || steps-- <= 0) return;
-    if (path.length === parties) { found++; return; }
-    for (const [next, subjects] of adjacency.get(path[path.length - 1]) || []) {
-      if (path.includes(next)) continue;
-      if (path.length > 1 && !carriesUpstreamData(subjects)) continue;
-      walk(path.concat(next));
-    }
-  };
-  for (const start of adjacency.keys()) {
-    if (found >= limit || steps <= 0) break;
-    walk([start]);
-  }
-  return found;
-}
-
-function countChains(parties = 4, limit = 400) {
-  const tracks = state.track === "both"
-    ? ["personal_data", "inventory"] : [state.track];
-  return tracks.reduce((n, t) => n + countChainsOnTrack(t, parties, limit), 0);
-}
-
 let lastSnapshot = null;
 
 function renderStats(snapshot) {
   if (snapshot) lastSnapshot = snapshot;
   snapshot = lastSnapshot;
-  const parties = [...state.visible].filter((id) => {
+  const recipients = new Set();
+  for (const e of state.graph.edges) {
+    if (!edgePasses(e)) continue;
+    if (!state.visible.has(e.src) || !state.visible.has(e.dst)) continue;
+    if (e.kind === "discloses_sharing_with" || e.kind === "owned_by") {
+      recipients.add(e.dst);
+    }
+  }
+  const named = (id) => {
     const n = state.byId.get(id);
-    return n && n.type !== "domain";
-  }).length;
+    return n && n.type !== "domain" && n.type !== "target";
+  };
   const arrangements = state.graph.edges.filter(
     (e) => edgePasses(e) && e.kind !== "owned_by"
       && state.visible.has(e.src) && state.visible.has(e.dst),
   ).length;
-  $("stat-nodes").textContent = parties;
+  $("stat-recipients").textContent = [...recipients].filter(named).length;
   $("stat-edges").textContent = arrangements;
   $("stat-edges-label").textContent = state.track === "both"
     ? "arrangements (both tracks)"
     : `${TRACK_LABEL[state.track]} arrangements`;
   $("stat-crawled").textContent = (snapshot && snapshot.progress.crawled) || 0;
-  $("stat-chains").textContent = countChains();
 
   const unresolved = (snapshot && snapshot.unresolved) || [];
   $("unresolved-box").hidden = unresolved.length === 0;
@@ -900,20 +1043,33 @@ function renderStats(snapshot) {
 }
 
 // -------------------------------------------------------------- collection ---
+function clockLabel(seconds) {
+  const s = Math.max(0, Math.round(seconds || 0));
+  const m = Math.floor(s / 60);
+  return m ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+
 function setProgress(snapshot) {
   const box = $("progress");
   if (!snapshot) { box.hidden = true; return; }
   const p = snapshot.progress;
   box.hidden = !state.running && p.phase === "done" && !p.error;
   const done = p.parties_total ? `${p.parties_done}/${p.parties_total} parties` : "";
+  const clock = p.time_limit
+    ? ` · ${clockLabel(p.elapsed)} of ${clockLabel(p.time_limit)}`
+    : (p.elapsed ? ` · ${clockLabel(p.elapsed)}` : "");
   const text = p.error
     ? `Error: ${p.error}`
-    : `hop ${p.hop} of ${p.hops} · ${p.phase}${done ? " · " + done : ""}`
+    : `hop ${p.hop} of ${p.hops} · ${p.phase}${done ? " · " + done : ""}${clock}`
       + (p.current ? ` · ${p.current}` : "");
   $("progress-text").textContent = text;
-  const frac = p.parties_total
-    ? (p.hop - 1 + p.parties_done / p.parties_total) / Math.max(1, p.hops)
-    : p.hop / Math.max(1, p.hops);
+  // A walk given a clock is measured by it; the ring it is on says little
+  // about how much of the ecosystem is left.
+  const frac = p.time_limit
+    ? p.elapsed / p.time_limit
+    : (p.parties_total
+      ? (p.hop - 1 + p.parties_done / p.parties_total) / Math.max(1, p.hops)
+      : p.hop / Math.max(1, p.hops));
   $("progress-bar").style.width = `${Math.round(Math.min(1, frac) * 100)}%`;
 }
 
@@ -951,7 +1107,10 @@ async function start() {
     const resp = await fetch(`${BRIDGE}/graph`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: state.origin, hops: state.hops, requests, cmp }),
+      body: JSON.stringify({
+        url: state.origin, hops: state.hops,
+        time_limit: state.timeLimit * 60, requests, cmp,
+      }),
     });
     data = await resp.json();
     if (!resp.ok && resp.status !== 202) throw new Error(data.error || `HTTP ${resp.status}`);
@@ -1014,6 +1173,7 @@ function applySnapshot(snapshot, refit) {
 function rebuild(refit) {
   computeVisible();
   layout();
+  buildRenderModel();
   applySearch($("search").value);
   if (refit) fit(); else draw();
   renderDetail();
@@ -1059,11 +1219,13 @@ for (const [id, key] of [
   });
 }
 
-$("hops").addEventListener("click", (ev) => {
-  const button = ev.target.closest("button");
-  if (!button) return;
-  state.hops = Number(button.dataset.hops);
-  for (const b of $("hops").querySelectorAll("button")) b.classList.toggle("on", b === button);
+$("hops").addEventListener("change", () => {
+  state.hops = Math.max(1, Math.round(Number($("hops").value) || 1));
+  $("hops").value = state.hops;
+});
+$("time-limit").addEventListener("change", () => {
+  state.timeLimit = Math.max(0, Math.round(Number($("time-limit").value) || 0));
+  $("time-limit").value = state.timeLimit;
 });
 $("track").addEventListener("click", (ev) => {
   const button = ev.target.closest("button");

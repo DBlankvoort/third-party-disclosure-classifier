@@ -5,6 +5,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import threading
+import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +21,12 @@ from .classify.poligraph_connector import (
 from .classify.structured_relations import structured_relations_for_target
 from .cmp import cmp_relations
 from .collect.base import Corpus, Target, deadline
-from .collect.runner import fetch_target
+from .collect.runner import (
+    close_thread_renderer,
+    close_walk_renderers,
+    fetch_target,
+    render_thin_docs,
+)
 from .entities import observed_domain_hints, resolve_entity_domain, resolve_name
 from .sharing_graph import (
     NodeType,
@@ -35,7 +41,15 @@ FETCH_WORKERS = 8
 
 ANALYSIS_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
 
+CHUNK = 96
+
+RENDER_WORKERS = 2
+
 ORIGIN_DEADLINE = 120.0
+PARTY_DEADLINE = 45.0
+RENDER_DEADLINE = 45.0
+
+TIME_LIMIT = 0.0  # 0 leaves the walk unbounded
 
 
 def origin_of(url: str) -> str:
@@ -102,14 +116,21 @@ def analyse_origin(
 
 
 def fetch_origin(corpus: Corpus, origin: str, force: bool = False,
-                 delay: float = 0.2) -> bool:
+                 delay: float = 0.2, render: bool = True) -> bool:
     """Collect one origin's document set, reusing the corpus when present."""
     target = target_for_origin(origin)
     manifest = corpus.root / target.id / "manifest.json"
-    if manifest.exists() and not force:
-        return True
-    fetch_target(target, corpus, force=force, delay=delay)
-    return manifest.exists()
+    if not manifest.exists() or force:
+        fetch_target(target, corpus, force=force, delay=delay)
+        if not manifest.exists():
+            return False
+    if render:
+        try:
+            _, docs = corpus.read_manifest(target.id)
+            render_thin_docs(corpus, target, docs)
+        except (OSError, ValueError, KeyError):
+            pass
+    return True
 
 
 def _init_analysis_worker() -> None:
@@ -127,6 +148,14 @@ def _init_analysis_worker() -> None:
 
     warm_pipeline()
     load_ner()
+
+
+def _close_renderer(gate: threading.Barrier) -> None:
+    try:
+        gate.wait(timeout=30)
+    except threading.BrokenBarrierError:
+        pass
+    close_thread_renderer()
 
 
 def _analyse_job(payload: tuple) -> tuple[list[dict], bool]:
@@ -155,6 +184,8 @@ class Progress:
     parties_done: int = 0
     current: str = ""
     crawled: int = 0              # origins collected across the whole run
+    elapsed: float = 0.0          # seconds since the walk began
+    time_limit: float = 0.0       # seconds it may run for, 0 for unbounded
     unresolved: list[str] = field(default_factory=list)
     error: str = ""
 
@@ -163,6 +194,7 @@ class Progress:
             "hop": self.hop, "hops": self.hops, "phase": self.phase,
             "parties_total": self.parties_total, "parties_done": self.parties_done,
             "current": self.current, "crawled": self.crawled,
+            "elapsed": round(self.elapsed, 1), "time_limit": self.time_limit,
             "unresolved": list(self.unresolved), "error": self.error,
         }
 
@@ -191,32 +223,56 @@ class Expansion:
         cmp=None,
         analysis_workers: int = ANALYSIS_WORKERS,
         origin_deadline: float = ORIGIN_DEADLINE,
+        party_deadline: float = PARTY_DEADLINE,
+        render: bool = True,
+        render_workers: int = RENDER_WORKERS,
+        time_limit: float = TIME_LIMIT,
+        chunk: int = CHUNK,
     ) -> None:
         self.corpus = Corpus(corpus_root)
         self.seed_url = seed_url
         self.origin = origin_of(seed_url)
-        self.hops = max(1, min(3, int(hops)))
+        self.hops = max(1, int(hops))
         self.origin_deadline = origin_deadline
+        self.party_deadline = party_deadline
         self.requests = requests or []
         self.force = force
         self.delay = delay
         self.overrides = overrides or {}
         self.workers = max(1, workers)
         self.analysis_workers = max(1, analysis_workers)
+        self.render = render
+        self.render_workers = max(1, render_workers)
+        self.time_limit = max(0.0, float(time_limit))
+        self.chunk = max(1, int(chunk))
+        self.started = 0.0
         self.cmp = cmp or {}
         self.graph = SharingGraph()
-        self.progress = Progress(hops=self.hops)
+        self.progress = Progress(hops=self.hops, time_limit=self.time_limit)
         self.unresolved: dict[str, str] = {}   # canonical key -> display name
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._timed_out = False
+        self._pool: ProcessPoolExecutor | None = None
 
     # -- control -------------------------------------------------------- #
     def stop(self) -> None:
         self._stop.set()
 
     @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started if self.started else 0.0
+
+    @property
     def stopped(self) -> bool:
-        return self._stop.is_set()
+        """A reader's stop and a spent clock end the walk by the same route."""
+        if self._stop.is_set():
+            return True
+        if self.time_limit and self.elapsed >= self.time_limit:
+            self._timed_out = True
+            self._stop.set()
+            return True
+        return False
 
     def apply_edits(self, edits) -> tuple[list, list]:
         """Apply a reader's corrections to the graph as it stands."""
@@ -232,6 +288,7 @@ class Expansion:
     def snapshot(self) -> dict:
         """The graph as built so far, with the current progress."""
         with self._lock:
+            self.progress.elapsed = self.elapsed
             return {
                 "origin": self.origin,
                 "hops": self.hops,
@@ -249,12 +306,19 @@ class Expansion:
                 self.progress.error = f"{type(exc).__name__}: {exc}"
                 self.progress.phase = "done"
             raise
+        finally:
+            close_walk_renderers()
+            if self._pool is not None:
+                self._pool.shutdown(wait=not self.stopped, cancel_futures=True)
+                self._pool = None
         return self.graph
 
     def _run(self) -> SharingGraph:
+        self.started = time.monotonic()
         self._set(phase="fetching", hop=0, current=self.origin)
         with deadline(self.origin_deadline):
-            fetch_origin(self.corpus, self.origin, force=self.force, delay=self.delay)
+            fetch_origin(self.corpus, self.origin, force=self.force,
+                         delay=self.delay, render=self.render)
         self._set(phase="analysing", crawled=1)
         relations, observed = analyse_origin(
             self.corpus, self.origin, requests=self.requests,
@@ -273,10 +337,16 @@ class Expansion:
         for hop in range(1, self.hops):
             if self.stopped or not frontier:
                 break
+            frontier = self._ranked(frontier)
             self._set(hop=hop, parties_total=len(frontier), parties_done=0)
             frontier = self._expand_hop(frontier, hop, expanded, hints)
 
-        self._set(phase="stopped" if self.stopped else "done", current="")
+        phase = "done"
+        if self._timed_out:
+            phase = "timed out"
+        elif self.stopped:
+            phase = "stopped"
+        self._set(phase=phase, current="", elapsed=self.elapsed)
         return self.graph
 
     def _expand_hop(
@@ -285,64 +355,123 @@ class Expansion:
     ) -> list[_Party]:
         """Collect and analyse one ring, returning the ring beyond it."""
         expanded.update(p.node_id for p in parties)
-        self._set(phase="fetching")
-        with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            list(pool.map(self._fetch_party, parties))
-        if self.stopped:
-            return []
-
-        self._set(phase="analysing")
         nxt: list[_Party] = []
-        for party, (relations, analysed) in self._analyse_ring(parties):
+        for start in range(0, len(parties), self.chunk):
             if self.stopped:
                 break
-            with self._lock:
-                expand_node(self.graph, party.node_id, relations, hop=hop,
-                            primary_domain=party.domain, expanded=analysed)
-                self.progress.parties_done += 1
-                self.progress.current = party.name
-            for onward in self._parties(party.node_id, hints):
-                if onward.node_id not in expanded:
-                    nxt.append(onward)
+            batch = parties[start:start + self.chunk]
+            self._set(phase="fetching")
+            with ThreadPoolExecutor(max_workers=self.workers) as pool:
+                reached = [p for p, ok in zip(batch, pool.map(self._fetch_party, batch))
+                           if ok]
+            if self.stopped:
+                break
+            if not reached:
+                continue
+            self._render_ring(reached)
+            if self.stopped:
+                break
+
+            self._set(phase="analysing")
+            for party, (relations, analysed) in self._analyse_ring(reached):
+                with self._lock:
+                    expand_node(self.graph, party.node_id, relations, hop=hop,
+                                primary_domain=party.domain, expanded=analysed)
+                    self.progress.parties_done += 1
+                    self.progress.current = party.name
+                for onward in self._parties(party.node_id, hints):
+                    if onward.node_id not in expanded:
+                        nxt.append(onward)
         seen: set[str] = set()
         return [p for p in nxt if not (p.node_id in seen or seen.add(p.node_id))]
 
+    def _ranked(self, parties: list[_Party]) -> list[_Party]:
+        """A ring ordered by evidence."""
+        with self._lock:
+            return sorted(
+                parties,
+                key=lambda p: (-len(self.graph.in_edges(p.node_id)),
+                               -self._top_confidence(p.node_id), p.name.lower()),
+            )
+
+    def _top_confidence(self, node_id: str) -> float:
+        return max(
+            (ev.confidence for edge in self.graph.in_edges(node_id)
+             for ev in edge.evidence),
+            default=0.0,
+        )
+
     def _analyse_ring(self, parties: list[_Party]):
-        """Yield ``(party, (relations, analysed))`` for a whole ring."""
+        """Yield ``(party, (relations, analysed))`` for one batch."""
         def payload(p: _Party) -> tuple:
             return (str(self.corpus.root), f"https://{p.domain}", self.delay)
 
-        workers = min(self.analysis_workers, len(parties))
-        if workers <= 1:
+        if self.analysis_workers <= 1 or len(parties) == 1:
             for party in parties:
                 if self.stopped:
                     return
                 self._set(current=party.name)
                 yield party, _analyse_job(payload(party))
             return
-        ctx = multiprocessing.get_context("spawn")
-        pool = ProcessPoolExecutor(max_workers=workers, mp_context=ctx,
-                                   initializer=_init_analysis_worker)
-        try:
-            futures = {pool.submit(_analyse_job, payload(p)): p for p in parties}
-            for future in as_completed(futures):
-                if self.stopped:
-                    return
-                yield futures[future], future.result()
-        finally:
-            pool.shutdown(wait=not self.stopped, cancel_futures=True)
+        pool = self._analysis_pool()
+        futures = {pool.submit(_analyse_job, payload(p)): p for p in parties}
+        for future in as_completed(futures):
+            if self.stopped:
+                for pending in futures:
+                    pending.cancel()
+                return
+            yield futures[future], future.result()
 
-    def _fetch_party(self, party: _Party) -> None:
+    def _analysis_pool(self) -> ProcessPoolExecutor:
+        if self._pool is None:
+            ctx = multiprocessing.get_context("spawn")
+            self._pool = ProcessPoolExecutor(
+                max_workers=self.analysis_workers, mp_context=ctx,
+                initializer=_init_analysis_worker,
+            )
+        return self._pool
+
+    def _fetch_party(self, party: _Party) -> bool:
+        """Collect one party's origin, reporting whether it can be analysed."""
         if self.stopped:
-            return
+            return False
         self._set(current=party.name)
         try:
-            with deadline(self.origin_deadline):
-                fetch_origin(self.corpus, f"https://{party.domain}", delay=self.delay)
+            with deadline(self.party_deadline):
+                fetch_origin(self.corpus, f"https://{party.domain}",
+                             delay=self.delay, render=False)
         except Exception:  # noqa: BLE001
-            return
+            return False
         with self._lock:
             self.progress.crawled += 1
+        return True
+
+    def _render_ring(self, parties: list[_Party]) -> None:
+        """Re-fetch the ring's client-rendered documents with a browser."""
+        if not self.render:
+            return
+        seen: set[str] = set()
+        sites = [p for p in parties
+                 if not (p.domain in seen or seen.add(p.domain))]
+        if not sites:
+            return
+        self._set(phase="rendering")
+        workers = min(self.render_workers, len(sites))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(self._render_party, sites))
+            gate = threading.Barrier(workers)
+            list(pool.map(lambda _: _close_renderer(gate), range(workers)))
+
+    def _render_party(self, party: _Party) -> None:
+        if self.stopped:
+            return
+        target = target_for_origin(f"https://{party.domain}")
+        try:
+            with deadline(RENDER_DEADLINE):
+                _, docs = self.corpus.read_manifest(target.id)
+                render_thin_docs(self.corpus, target, docs)
+        except Exception:  # noqa: BLE001
+            return
 
     def _parties(self, node_id: str, hints: dict[str, str]) -> list[_Party]:
         """The named organisations one node hands data to."""

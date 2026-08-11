@@ -13,6 +13,7 @@ from .entities import (
     is_investor_parent,
     is_shared_platform,
     resolve_name,
+    service_purpose,
     tcf_vendor,
 )
 from .tracks import (
@@ -410,6 +411,22 @@ class SharingGraph:
         """Nodes with no outgoing edges."""
         return [n for nid, n in self.nodes.items() if not self.out_edges(nid)]
 
+    def party_roles(self) -> dict[str, set[str]]:
+        """Named parties split by the side of an arrangement they stand on."""
+        recipients: set[str] = set()
+        suppliers: set[str] = set()
+        for edge in self.edges.values():
+            if edge.kind is EdgeKind.DISCLOSES_SHARING_WITH:
+                recipients.add(edge.dst)
+            elif edge.kind is EdgeKind.SUPPLIES:
+                suppliers.add(edge.src)
+            elif edge.kind is EdgeKind.OWNED_BY:
+                recipients.add(edge.dst)
+        named = {nid for nid, n in self.nodes.items()
+                 if n.type in (NodeType.ENTITY, NodeType.GENERIC)}
+        recipients &= named
+        return {"recipients": recipients, "suppliers": (suppliers & named) - recipients}
+
     def termination(self, node_id: str) -> str:
         node = self.nodes.get(node_id)
         if node is None:
@@ -754,12 +771,16 @@ def attach(
             if nid == tid:
                 continue
             graph.add_node(node)
+        purposes = list(rel.get("purposes") or ())
+        attested = service_purpose(name)
+        if attested and attested not in purposes:
+            purposes.append(attested)
         ev = Evidence(
             source=_evidence_source(rel), hop=hop,
             doc_ids=list(rel.get("doc_ids") or ()),
             snippet=rel.get("text") or "",
             data_type=rel.get("data_type") or "",
-            purposes=list(rel.get("purposes") or ()),
+            purposes=purposes,
             negative=bool(rel.get("negative")),
             track=rel.get("track") or track_for_sources(rel.get("sources")),
             subject=rel.get("subject") or UNKNOWN,

@@ -9,6 +9,7 @@ from tpd.collect.base import Corpus
 from tpd.collect.runner import fetch_target
 from tpd.expand import origin_of, target_for_origin
 from tpd.classify.named_entities import first_party_tokens
+from tpd.classify.named_relations import named_org_relations
 from tpd.classify.poligraph_connector import (
     merge_relations,
     poligraph_available,
@@ -84,15 +85,12 @@ def _empty(origin: str, target_id: str, cached: bool) -> dict:
         "cached": cached,
         "classified": False,
         "usable": False,
-        "typology_class": "",
         "facets": [],
         "media_present": [],
         "specificities": [],
         "relevant_docs": 0,
         "fetched_docs": 0,
         "failed_urls": [],
-        "named_orgs": [],
-        "category_terms": [],
         "documents": [],
         "sharing_relations": [],
         "poligraph": False,
@@ -164,13 +162,19 @@ def analyze_url(
     structured_rels = structured_relations_for_target(
         corpus, raw_docs, first_party=first_party,
     )
+    named_rels = named_org_relations(
+        corpus, raw_docs, target_type=target.type, first_party=first_party,
+        use_ner=use_ner,
+    )
     # Observed requests name parties the documents may omit entirely.
     observed = observed_hosts(requests, origin, first_party=first_party)
     traffic_rels = traffic_relations(requests, origin, first_party=first_party)
     # The consent dialog names parties the crawled documents never render.
     cmp_parties = cmp_vendors(cmp, first_party=first_party)
     cmp_rels = cmp_relations(cmp, first_party=first_party)
-    sharing = merge_relations([prose_rels, structured_rels, traffic_rels, cmp_rels])
+    sharing = merge_relations(
+        [prose_rels, structured_rels, named_rels, traffic_rels, cmp_rels]
+    )
 
     # Per-document view.
     documents = [
@@ -189,8 +193,7 @@ def analyze_url(
 
     # Aggregate view.
     media_present = sorted(m.value for m in media_of(set(tc.facets)))
-    named = sorted({o for d in tc.docs for o in d.named_orgs}, key=str.lower)
-    categories = sorted({c for d in tc.docs for c in d.category_terms}, key=str.lower)
+    named = {o for d in tc.docs for o in d.named_orgs}
     specificities = sorted({f.split(":", 1)[1] for f in tc.facets if ":" in f})
 
     return {
@@ -199,15 +202,12 @@ def analyze_url(
         "cached": cached,
         "classified": bool(tc.classified),
         "usable": bool(usable),
-        "typology_class": tc.typology_class,
         "facets": list(tc.facets),
         "media_present": media_present,
         "specificities": specificities,
         "relevant_docs": tc.relevant_docs,
         "fetched_docs": fetched,
         "failed_urls": failed,
-        "named_orgs": named,
-        "category_terms": categories,
         "documents": documents,
         "sharing_relations": sharing,
         "poligraph": poligraph_on,

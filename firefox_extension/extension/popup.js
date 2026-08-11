@@ -28,10 +28,10 @@ const ACTION_COLOR = {
 const NEG_COLOR = "#f87171";
 
 const SOURCE_LABEL = {
-  ads_txt: "Authorized ad sellers — ads.txt",
-  sellers_json: "Ad-exchange sellers — sellers.json",
+  ads_txt: "Authorized ad sellers",
+  sellers_json: "Ad-exchange sellers",
   tcf_gvl: "IAB-TCF consent vendors",
-  vendors_json: "Declared vendors — vendors.json",
+  vendors_json: "Declared vendors",
   cookie_table: "Cookie / tracking providers",
   vendor_table: "Vendor & sub-processor tables",
 };
@@ -156,7 +156,6 @@ function render(d) {
   $("origin").textContent = d.origin;
   $("origin").title = d.origin;
 
-  $("class-pill").textContent = d.typology_class || "no disclosure detected";
   $("source-pill").textContent =
     (d.cached ? "cached" : "live crawl") + ` · ${d.fetched_docs} doc(s) fetched`;
 
@@ -166,8 +165,6 @@ function render(d) {
   renderRelations(relations, d.poligraph !== false);
   renderGraph(relations, d.origin);
   renderRights(d.rights || { links: {}, emails: [] }, d.origin);
-  renderRollup("orgs", d.named_orgs);
-  renderRollup("cats", d.category_terms);
   renderObserved(d.observed_parties || [], d.undisclosed_parties || []);
   renderCmp(d.cmp_parties || []);
 }
@@ -175,7 +172,8 @@ function render(d) {
 function renderCmp(parties) {
   const box = $("cmp-box");
   box.hidden = parties.length === 0;
-  $("cmp-count").textContent = parties.length;
+  $("cmp-count").textContent =
+    `${parties.length} entit${parties.length === 1 ? "y" : "ies"}`;
 
   const note = $("cmp-note");
   const readOff = parties.filter((p) => p.source !== "tcf").length;
@@ -200,7 +198,9 @@ function renderCmp(parties) {
 function renderObserved(observed, undisclosed) {
   const box = $("observed-box");
   box.hidden = observed.length === 0;
-  $("observed-count").textContent = observed.length;
+  $("observed-count").textContent =
+    `${observed.length} entit${observed.length === 1 ? "y" : "ies"} · ` +
+    "reached while the page loaded";
   const undisclosedKeys = new Set(undisclosed.map((o) => o.entity));
 
   const note = $("undisclosed-note");
@@ -228,16 +228,12 @@ function renderObserved(observed, undisclosed) {
 function renderDocs(docs) {
   const ul = $("docs");
   ul.innerHTML = "";
-  const recognised = docs.filter((x) => x.medium);
-  $("docs-empty").hidden = recognised.length > 0;
+  const disclosing = docs.filter((x) => x.medium && x.relevant);
+  $("docs-empty").hidden = disclosing.length > 0;
 
-  for (const doc of recognised) {
+  for (const doc of disclosing) {
     const li = document.createElement("li");
     li.className = "doc";
-
-    const dot = document.createElement("span");
-    dot.className = "dot" + (doc.relevant ? " on" : "");
-    dot.title = doc.relevant ? "discloses third parties" : "recognised, none found";
 
     const main = document.createElement("div");
     main.className = "doc-main";
@@ -257,7 +253,7 @@ function renderDocs(docs) {
     tag.className = `medium-tag ${doc.medium}`;
     tag.textContent = MEDIA_LABEL[doc.medium] || doc.medium;
 
-    li.append(dot, main, tag);
+    li.append(main, tag);
     ul.append(li);
   }
 }
@@ -394,9 +390,8 @@ function renderRelations(relations, enabled) {
 
   const box = $("firstparty-box");
   box.hidden = first.length === 0;
-  const count = $("firstparty-count");
-  count.textContent = first.length;
-  count.classList.toggle("zero", first.length === 0);
+  $("firstparty-count").textContent =
+    `${first.length} arrangement${first.length === 1 ? "" : "s"}`;
   const wrap = $("firstparty");
   wrap.innerHTML = "";
   for (const r of first) {
@@ -678,22 +673,6 @@ function renderRights(rights, origin) {
   box.append(h);
   for (const [label, url] of INDUSTRY_OPTOUTS) {
     box.append(rightsRow(label, url, "small"));
-  }
-}
-
-function renderRollup(prefix, items) {
-  const count = $(`${prefix}-count`);
-  count.textContent = items.length;
-  count.classList.toggle("zero", items.length === 0);
-  const box = $(`${prefix}-box`);
-  box.style.opacity = items.length ? "1" : "0.55";
-  const wrap = $(prefix);
-  wrap.innerHTML = "";
-  for (const it of items) {
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = it;
-    wrap.append(tag);
   }
 }
 

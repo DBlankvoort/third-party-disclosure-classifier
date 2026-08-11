@@ -391,6 +391,27 @@ ON_THIRD_PARTY_SURFACE_RE = re.compile(
 
 _SELF_RECIPIENT_RE = re.compile(r"^\s*(?:(?:to|with)\s+)?(?:you|us)\b", re.I)
 
+# --------------------------------------------------------------------------- #
+# Inbound acquisition
+# --------------------------------------------------------------------------- #
+_RECEIPT_VERBS = r"(?:acquir|receiv|obtain|import|source|purchas|licen[cs])(?:e|es|ed|ing|s)?"
+_FROM_SOURCE = r"(?:from|via|through|by way of|courtesy of)"
+
+INBOUND_PATTERNS = [
+    rf"\b(?:we|us|our)\b[^.;:!?]{{0,80}}?\b{_RECEIPT_VERBS}\b[^.;:!?]{{0,40}}?\b{_FROM_SOURCE}\b",
+    r"\b(?:provided|supplied|made available|disclosed|transferred|sent)\s+"
+    r"to\s+(?:us|our\s+\w+)\s+by\b",
+    rf"\b(?:data|information|records?|details?)\s+{_RECEIPT_VERBS}\s+{_FROM_SOURCE}\b",
+]
+INBOUND_RE = re.compile("|".join(INBOUND_PATTERNS), re.I)
+
+
+def inbound_acquisition(segment: str) -> bool:
+    """True iff a segment describes the first party receiving data from a source."""
+    if not INBOUND_RE.search(segment):
+        return False
+    return not (positive_sharing(segment) or implicit_sale(segment))
+
 
 # --------------------------------------------------------------------------- #
 # Affirmations/negations

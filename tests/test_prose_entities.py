@@ -132,3 +132,42 @@ class TestWithLanguageModel:
         html = ("<h2>Analytics</h2>"
                 "<p>Measurement on this site is performed by Chartbeat.</p>")
         assert "chartbeat" in _names(_scan(html, ner_fn=ner_fn))
+
+
+class TestDirection:
+    def test_a_party_a_policy_acquires_data_via_is_read_as_a_source(self):
+        html = ("<p>Our policy also covers the data we acquire via Criteo, "
+                "and they have a robust privacy policy.</p>")
+        assert _by_name(_scan(html), "criteo").direction == "upstream"
+
+    def test_a_party_a_policy_shares_with_is_read_as_a_recipient(self):
+        html = "<p>We share your personal data with Criteo for advertising.</p>"
+        assert _by_name(_scan(html), "criteo").direction == "downstream"
+
+    def test_one_sharing_clause_settles_a_party_named_both_ways(self):
+        html = ("<p>We acquire order data from Criteo.</p>"
+                "<p>We also share your email address with Criteo.</p>")
+        assert _by_name(_scan(html), "criteo").direction == "downstream"
+
+    def test_a_clause_stating_no_flow_leaves_the_direction_alone(self):
+        html = ("<p>Our policy also covers the data we acquire via Criteo.</p>"
+                "<p>To opt out of Criteo, go to that site.</p>")
+        assert _by_name(_scan(html), "criteo").direction == "upstream"
+
+
+class TestCoordination:
+    def test_a_name_listed_beside_a_known_party_is_admitted(self):
+        html = "<p>We work with Criteo, Wickford Analytics and Talling Media.</p>"
+        names = _names(_scan(html))
+        assert {"wickford analytics", "talling media"} <= names
+
+    def test_a_list_naming_no_known_party_admits_none_of_it(self):
+        html = "<p>Our offices are in Harrogate, Perpignan and Trondheim.</p>"
+        names = _names(_scan(html))
+        assert not {"harrogate", "perpignan", "trondheim"} & names
+
+    def test_a_pair_is_not_read_as_a_list(self):
+        html = "<p>We work with Criteo and Talling Media.</p>"
+        entity = next((e for e in _scan(html).entities
+                       if e.name.lower() == "talling media"), None)
+        assert entity is None or "coordinated" not in entity.signals

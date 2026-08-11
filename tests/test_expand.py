@@ -26,7 +26,7 @@ def recorded(monkeypatch):
     fetched: list[str] = []
     relations: dict[str, list[dict]] = {}
 
-    def fake_fetch(corpus, origin, force=False, delay=0.2):
+    def fake_fetch(corpus, origin, force=False, delay=0.2, render=True):
         fetched.append(origin)
         return True
 
@@ -40,6 +40,8 @@ def recorded(monkeypatch):
 
 
 def _walk(tmp_path, hops, **kw):
+    kw.setdefault("render", False)
+    kw.setdefault("analysis_workers", 1)
     return Expansion(tmp_path, "https://seed.example", hops=hops, delay=0, **kw)
 
 
@@ -89,9 +91,66 @@ class TestDepth:
         walk.run()
         assert "https://adobe.com" not in recorded["fetched"]
 
-    def test_depth_is_held_within_the_offered_range(self, tmp_path, recorded):
-        assert _walk(tmp_path, 9).hops == 3
+    def test_any_depth_is_accepted(self, tmp_path, recorded):
+        assert _walk(tmp_path, 40).hops == 40
         assert _walk(tmp_path, 0).hops == 1
+
+    def test_five_hops_reach_the_fifth_ring(self, tmp_path, recorded):
+        chain = ["https://seed.example", "https://criteo.com", "https://adobe.com",
+                 "https://oracle.com", "https://salesforce.com"]
+        names = ["Criteo", "Adobe", "Oracle", "Salesforce"]
+        for origin, name in zip(chain[:-1], names, strict=True):
+            recorded["relations"][origin] = [_rel(name)]
+        walk = _walk(tmp_path, 5)
+        walk.run()
+        assert recorded["fetched"] == chain
+        assert walk.graph.nodes[entity_node_id("Salesforce")].hop_first_seen == 4
+
+
+class TestRingWidth:
+    def test_a_ring_wider_than_one_batch_is_collected_whole(self, tmp_path, recorded):
+        recorded["relations"]["https://seed.example"] = [
+            _rel(name) for name in ("Criteo", "Adobe", "Oracle")
+        ]
+        walk = _walk(tmp_path, 2, chunk=2)
+        walk.run()
+        assert len(recorded["fetched"]) == 4
+
+    def test_a_party_in_a_later_batch_still_opens_the_ring_beyond(
+        self, tmp_path, recorded,
+    ):
+        recorded["relations"]["https://seed.example"] = [
+            _rel(name) for name in ("Criteo", "Adobe", "Oracle")
+        ]
+        recorded["relations"]["https://oracle.com"] = [_rel("Salesforce")]
+        walk = _walk(tmp_path, 3, chunk=2)
+        walk.run()
+        assert "https://salesforce.com" in recorded["fetched"]
+
+    def test_a_ring_is_collected_best_evidenced_first(self, tmp_path, recorded):
+        recorded["relations"]["https://seed.example"] = [_rel("Criteo"), _rel("Adobe")]
+        recorded["relations"]["https://criteo.com"] = [_rel("Oracle")]
+        recorded["relations"]["https://adobe.com"] = [_rel("Oracle"), _rel("Salesforce")]
+        walk = _walk(tmp_path, 3, chunk=1)
+        walk.run()
+        order = recorded["fetched"]
+        assert order.index("https://oracle.com") < order.index("https://salesforce.com")
+
+
+class TestTimeLimit:
+    def test_a_spent_clock_ends_the_walk(self, tmp_path, recorded):
+        recorded["relations"]["https://seed.example"] = [_rel("Criteo")]
+        walk = _walk(tmp_path, 3, time_limit=1e-6)
+        walk.run()
+        assert walk.progress.phase == "timed out"
+        assert recorded["fetched"] == ["https://seed.example"]
+
+    def test_an_unbounded_walk_reports_no_limit(self, tmp_path, recorded):
+        recorded["relations"]["https://seed.example"] = [_rel("Criteo")]
+        walk = _walk(tmp_path, 2)
+        walk.run()
+        assert walk.progress.phase == "done"
+        assert walk.snapshot()["progress"]["time_limit"] == 0.0
 
 
 class TestResolution:

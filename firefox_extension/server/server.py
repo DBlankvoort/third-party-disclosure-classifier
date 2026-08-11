@@ -51,12 +51,13 @@ def _entity_overrides() -> dict:
 
 
 def start_expansion(url: str, hops: int, requests: list, force: bool,
-                    cmp: dict | None = None) -> str:
+                    cmp: dict | None = None, time_limit: float = 0.0) -> str:
     from tpd.expand import Expansion
 
     expansion = Expansion(
         CONFIG["corpus_root"], url, hops=hops, requests=requests, force=force,
         delay=CONFIG["delay"], overrides=_entity_overrides(), cmp=cmp,
+        time_limit=time_limit,
     )
     job_id = uuid.uuid4().hex[:12]
 
@@ -208,16 +209,22 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/graph":
             try:
-                hops = max(1, min(3, int(payload.get("hops") or 1)))
+                hops = max(1, int(payload.get("hops") or 1))
             except (TypeError, ValueError):
                 hops = 1
             try:
+                time_limit = max(0.0, float(payload.get("time_limit") or 0))
+            except (TypeError, ValueError):
+                time_limit = 0.0
+            try:
                 job_id = start_expansion(url, hops, payload.get("requests") or [],
-                                         force, payload.get("cmp"))
+                                         force, payload.get("cmp"),
+                                         time_limit=time_limit)
             except ValueError as exc:
                 self._json(400, {"error": str(exc)})
                 return
-            self._json(202, {"job_id": job_id, "hops": hops})
+            self._json(202, {"job_id": job_id, "hops": hops,
+                             "time_limit": time_limit})
             return
 
         self._run(url, force, payload.get("requests") or [], payload.get("cmp"))

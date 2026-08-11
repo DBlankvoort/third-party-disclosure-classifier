@@ -269,32 +269,37 @@ def _report_graph(graph) -> None:
 @click.option("--corpus", "corpus_root", required=True)
 @click.option("--out", "out_path", required=True, help="graph JSON output path")
 @click.option("--hops", type=int, default=1, show_default=True,
-              help="how many rings of onward sharing to collect (1-3)")
+              help="how many rings of onward sharing to collect")
 @click.option("--entity-domains", "domains_path", default=None,
               help="hand-filled entity_resolution.csv supplying organisation domains")
 @click.option("--delay", type=float, default=0.2, show_default=True,
               help="polite per-request delay (s)")
 @click.option("--origin-deadline", type=float, default=None,
               help="seconds one origin's collection may consume (0 for no bound)")
+@click.option("--time-limit", type=float, default=0.0, show_default=True,
+              help="minutes the whole walk may run for (0 for no bound)")
+@click.option("--render/--no-render", default=True, show_default=True,
+              help="re-fetch each party's documents with a browser")
 @click.option("--split-tracks", is_flag=True,
               help="also write one graph file per track")
 @click.option("--force", is_flag=True, help="ignore the fetch cache")
 def expand_cmd(url, corpus_root, out_path, hops, domains_path, delay,
-               origin_deadline, split_tracks, force) -> None:
+               origin_deadline, time_limit, render, split_tracks, force) -> None:
     """Walk outward from one URL, collecting each party it shares with."""
     from .expand import ORIGIN_DEADLINE, Expansion
 
     overrides = load_entity_domains(domains_path) if domains_path else {}
     exp = Expansion(
         corpus_root, url, hops=hops, delay=delay, force=force,
-        overrides=overrides,
+        overrides=overrides, render=render, time_limit=time_limit * 60,
         origin_deadline=ORIGIN_DEADLINE if origin_deadline is None else origin_deadline,
     )
     click.echo(f"walking {exp.origin} to {exp.hops} hop(s) ...")
     exp.run()
     exp.graph.save(out_path)
     _report_graph(exp.graph)
-    click.echo(f"{exp.progress.crawled} origin(s) collected")
+    click.echo(f"{exp.progress.crawled} origin(s) collected in "
+               f"{exp.progress.elapsed / 60:.1f} min ({exp.progress.phase})")
     if exp.unresolved:
         click.echo(f"{len(exp.unresolved)} party name(s) resolved to no site")
     click.echo(f"wrote {out_path}")

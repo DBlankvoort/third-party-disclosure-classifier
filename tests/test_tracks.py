@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from tpd.classify.structured_relations import registry_relations, table_relations
+from tpd.classify.structured_relations import (
+    ALL_REGISTRY_KINDS,
+    registry_relations,
+    table_relations,
+)
 from tpd.sharing_graph import (
     EdgeKind,
     SharingGraph,
@@ -57,7 +61,7 @@ class TestTrackAssignment:
 
     def test_a_sellers_json_entry_concerns_no_person(self):
         raw = '{"sellers": [{"seller_id": "7", "name": "A Publisher"}]}'
-        rows = registry_relations(raw)
+        rows = registry_relations(raw, kinds=ALL_REGISTRY_KINDS)
         assert rows and rows[0]["track"] == INVENTORY
         assert rows[0]["subject"] == NOT_APPLICABLE
 

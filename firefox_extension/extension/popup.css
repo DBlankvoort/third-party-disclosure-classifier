@@ -99,7 +99,6 @@ main { padding: 12px 14px; }
   padding: 8px 10px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 9px;
 }
-.doc .dot { flex: none; }
 .doc .doc-main { min-width: 0; flex: 1; }
 .doc .role { font-weight: 600; font-size: 12.5px; }
 .doc .durl {
@@ -115,9 +114,6 @@ main { padding: 12px 14px; }
 .medium-tag.structured { color: #f0b35b; }
 .medium-tag.machine_readable { color: #6ee7b7; }
 .medium-tag.other_doc { color: #d8b4fe; }
-
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); display: inline-block; }
-.dot.on { background: var(--on); box-shadow: 0 0 0 3px var(--on-dim); }
 
 .empty { color: var(--ink-dim); font-style: italic; padding: 4px 2px; }
 
@@ -141,6 +137,7 @@ main { padding: 12px 14px; }
 
 /* ---------- sharing relations ---------- */
 .relations { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.relations ~ .relations { margin-top: 6px; }
 .rel-card {
   padding: 8px 10px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 9px;
@@ -168,23 +165,6 @@ main { padding: 12px 14px; }
 .act.neg { color: #f87171; border-color: #5b2a2a; background: #2a1c1e; }
 .tag.neg { text-decoration: line-through; color: var(--ink-dim); }
 
-/* ---------- rollups ---------- */
-.rollup {
-  margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
-  padding: 0 10px;
-}
-.rollup summary {
-  cursor: pointer; padding: 9px 0; font-weight: 600; display: flex;
-  align-items: center; justify-content: space-between; list-style: none;
-}
-.rollup summary::-webkit-details-marker { display: none; }
-.rollup summary::after { content: "▾"; color: var(--ink-dim); font-size: 10px; }
-.rollup[open] summary::after { content: "▴"; }
-.count {
-  margin-left: auto; margin-right: 8px; font-family: var(--mono); font-size: 11px;
-  color: var(--bg); background: var(--accent); border-radius: 999px; padding: 1px 8px; font-weight: 700;
-}
-.count.zero { background: var(--line); color: var(--ink-dim); }
 .taglist { display: flex; flex-wrap: wrap; gap: 5px; padding: 2px 0 12px; }
 .tag {
   font-size: 11px; padding: 3px 8px; border-radius: 6px;
@@ -226,12 +206,5 @@ main { padding: 12px 14px; }
 .taglist.tight { padding-bottom: 4px; }
 .tag.dim { color: var(--ink-dim); }
 .rel-name.plain { text-transform: none; }
-
-/* ---------- footer ---------- */
-footer {
-  display: flex; gap: 14px; padding: 9px 14px; border-top: 1px solid var(--line);
-  color: var(--ink-dim); font-size: 10.5px;
-}
-.legend { display: inline-flex; align-items: center; gap: 5px; }
 
 [hidden] { display: none !important; }

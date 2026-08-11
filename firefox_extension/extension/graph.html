@@ -17,11 +17,13 @@
     </div>
 
     <div class="controls">
-      <div class="seg" id="hops" role="radiogroup" aria-label="Hops to collect">
-        <button data-hops="1" class="on">1 hop</button>
-        <button data-hops="2">2 hops</button>
-        <button data-hops="3">3 hops</button>
-      </div>
+      <label class="field">hops
+        <input id="hops" class="num" type="number" min="1" step="1" value="1" />
+      </label>
+      <label class="field">minutes
+        <input id="time-limit" class="num" type="number" min="0" step="1" value="0"
+               title="wall clock the walk may run for; 0 for no limit" />
+      </label>
       <div class="seg" id="track" role="radiogroup" aria-label="Arrangements to show">
         <button data-track="personal_data" class="on">personal data</button>
         <button data-track="inventory">ad inventory</button>
@@ -47,8 +49,8 @@
       <div id="empty" class="empty-state">
         <p><strong>No network collected yet.</strong></p>
         <p>Choose a depth and press Collect. Every party that can be resolved to
-           a site is crawled, so two and three hops run for minutes and reach
-           hundreds of organisations.</p>
+           a site is crawled, so three hops and beyond run for tens of minutes
+           and reach thousands of organisations.</p>
       </div>
       <div class="legend" id="legend"></div>
       <div class="hint">drag to pan · scroll to zoom · click a node for its evidence · double-click to fit</div>
@@ -56,10 +58,9 @@
 
     <aside class="panel">
       <section class="stats">
-        <div><span id="stat-nodes">0</span><label>parties</label></div>
+        <div><span id="stat-recipients">0</span><label>parties data reaches</label></div>
         <div><span id="stat-edges">0</span><label id="stat-edges-label">personal-data arrangements</label></div>
         <div><span id="stat-crawled">0</span><label>sites collected</label></div>
-        <div><span id="stat-chains">0</span><label>4-party chains</label></div>
       </section>
 
       <section class="filters">
@@ -86,9 +87,7 @@
       <section id="unresolved-box" class="detail" hidden>
         <h2>Named but not reachable <span id="unresolved-count" class="count">0</span></h2>
         <p class="empty tight">
-          These parties are named in documents but resolve to no site, so the
-          walk stops at them. A hand-filled resolution sheet
-          (<code>tpd label --graph</code>) supplies their domains.
+          These parties are named in documents but resolve to no site.
         </p>
         <div id="unresolved" class="taglist"></div>
       </section>

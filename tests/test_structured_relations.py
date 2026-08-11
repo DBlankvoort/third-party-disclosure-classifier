@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from tpd.classify.structured_relations import (
+    ALL_REGISTRY_KINDS,
     purposes_from_text,
     registry_relations,
     table_relations,
@@ -145,18 +146,22 @@ class TestAdsTxt:
 
 
 class TestSellersJson:
+    def test_the_graph_does_not_read_a_sellers_json(self):
+        raw = json.dumps({"sellers": [{"seller_id": "1", "name": "Open Ads"}]})
+        assert registry_relations(raw) == []
+
     def test_confidential_sellers_skipped(self):
         raw = json.dumps({"sellers": [
             {"seller_id": "1", "name": "Open Ads"},
             {"seller_id": "2", "name": "Hidden", "is_confidential": 1},
         ]})
-        rels = registry_relations(raw)
+        rels = registry_relations(raw, kinds=ALL_REGISTRY_KINDS)
         assert [r["entity"] for r in rels] == ["open ads"]
         assert rels[0]["action"] == "collect"
 
     def test_sellers_are_upstream_suppliers(self):
         raw = json.dumps({"sellers": [{"seller_id": "1", "name": "Open Ads"}]})
-        (rel,) = registry_relations(raw)
+        (rel,) = registry_relations(raw, kinds=ALL_REGISTRY_KINDS)
         assert rel["direction"] == "upstream"
 
     def test_ads_txt_entries_stay_downstream(self):
