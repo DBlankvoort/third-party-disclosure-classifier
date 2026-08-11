@@ -31,7 +31,7 @@ def recorded(monkeypatch):
         return True
 
     def fake_analyse(corpus, origin, requests=None, force=False, delay=0.2,
-                     fetched=False, cmp=None):
+                     fetched=False, cmp=None, probe=False):
         return list(relations.get(origin, [])), []
 
     monkeypatch.setattr(expand_mod, "fetch_origin", fake_fetch)
@@ -250,7 +250,7 @@ class TestProgress:
         recorded["relations"]["https://seed.example"] = [_rel("Criteo")]
 
         def failing(corpus, origin, requests=None, force=False, delay=0.2,
-                    fetched=False, cmp=None):
+                    fetched=False, cmp=None, probe=False):
             if origin == "https://criteo.com":
                 raise FileNotFoundError(origin)
             return [_rel("Criteo")], []

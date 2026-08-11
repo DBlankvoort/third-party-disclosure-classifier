@@ -28,6 +28,7 @@ from .collect.runner import (
     render_thin_docs,
 )
 from .entities import observed_domain_hints, resolve_entity_domain, resolve_name
+from .probe import merge_requests, probe_origin
 from .sharing_graph import (
     NodeType,
     SharingGraph,
@@ -94,11 +95,15 @@ def analyse_origin(
     delay: float = 0.2,
     fetched: bool = False,
     cmp=None,
+    probe: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Collect ``origin`` if needed and return its ``(relations, observed)``."""
     target = target_for_origin(origin)
     if not fetched:
         fetch_origin(corpus, origin, force=force, delay=delay)
+    if probe:
+        probed, _accepted = probe_origin(origin)
+        requests = merge_requests(requests, probed)
     _, docs = corpus.read_manifest(target.id)
     fp_urls = [target.seed_policy_url] + [
         d.url for d in docs
@@ -158,16 +163,16 @@ def _close_renderer(gate: threading.Barrier) -> None:
     close_thread_renderer()
 
 
-def _analyse_job(payload: tuple) -> tuple[list[dict], bool]:
+def _analyse_job(payload: tuple) -> tuple[list[dict], list[dict], bool]:
     """Analyse one already-collected origin in a worker process."""
-    corpus_root, origin, delay = payload
+    corpus_root, origin, delay, probe = payload
     try:
-        relations, _ = analyse_origin(
-            Corpus(corpus_root), origin, delay=delay, fetched=True,
+        relations, observed = analyse_origin(
+            Corpus(corpus_root), origin, delay=delay, fetched=True, probe=probe,
         )
     except (FileNotFoundError, ValueError):
-        return [], False
-    return relations, True
+        return [], [], False
+    return relations, observed, True
 
 
 # --------------------------------------------------------------------------- #
@@ -228,6 +233,7 @@ class Expansion:
         render_workers: int = RENDER_WORKERS,
         time_limit: float = TIME_LIMIT,
         chunk: int = CHUNK,
+        probe: bool = False,
     ) -> None:
         self.corpus = Corpus(corpus_root)
         self.seed_url = seed_url
@@ -245,6 +251,7 @@ class Expansion:
         self.render_workers = max(1, render_workers)
         self.time_limit = max(0.0, float(time_limit))
         self.chunk = max(1, int(chunk))
+        self.probe = bool(probe)
         self.started = 0.0
         self.cmp = cmp or {}
         self.graph = SharingGraph()
@@ -323,6 +330,7 @@ class Expansion:
         relations, observed = analyse_origin(
             self.corpus, self.origin, requests=self.requests,
             force=self.force, delay=self.delay, fetched=True, cmp=self.cmp,
+            probe=self.probe,
         )
         seed_target = target_for_origin(self.origin)
         with self._lock:
@@ -373,9 +381,10 @@ class Expansion:
                 break
 
             self._set(phase="analysing")
-            for party, (relations, analysed) in self._analyse_ring(reached):
+            for party, (relations, observed, analysed) in self._analyse_ring(reached):
                 with self._lock:
-                    expand_node(self.graph, party.node_id, relations, hop=hop,
+                    expand_node(self.graph, party.node_id, relations,
+                                observed=observed, hop=hop,
                                 primary_domain=party.domain, expanded=analysed)
                     self.progress.parties_done += 1
                     self.progress.current = party.name
@@ -402,9 +411,10 @@ class Expansion:
         )
 
     def _analyse_ring(self, parties: list[_Party]):
-        """Yield ``(party, (relations, analysed))`` for one batch."""
+        """Yield ``(party, (relations, observed, analysed))`` for one batch."""
         def payload(p: _Party) -> tuple:
-            return (str(self.corpus.root), f"https://{p.domain}", self.delay)
+            return (str(self.corpus.root), f"https://{p.domain}", self.delay,
+                    self.probe)
 
         if self.analysis_workers <= 1 or len(parties) == 1:
             for party in parties:

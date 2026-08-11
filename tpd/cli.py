@@ -282,16 +282,20 @@ def _report_graph(graph) -> None:
               help="re-fetch each party's documents with a browser")
 @click.option("--split-tracks", is_flag=True,
               help="also write one graph file per track")
+@click.option("--probe", is_flag=True,
+              help="load each origin in a disposable profile and record what "
+                   "it contacts either side of its consent dialog")
 @click.option("--force", is_flag=True, help="ignore the fetch cache")
 def expand_cmd(url, corpus_root, out_path, hops, domains_path, delay,
-               origin_deadline, time_limit, render, split_tracks, force) -> None:
+               origin_deadline, time_limit, render, split_tracks, probe,
+               force) -> None:
     """Walk outward from one URL, collecting each party it shares with."""
     from .expand import ORIGIN_DEADLINE, Expansion
 
     overrides = load_entity_domains(domains_path) if domains_path else {}
     exp = Expansion(
         corpus_root, url, hops=hops, delay=delay, force=force,
-        overrides=overrides, render=render, time_limit=time_limit * 60,
+        overrides=overrides, render=render, time_limit=time_limit * 60, probe=probe,
         origin_deadline=ORIGIN_DEADLINE if origin_deadline is None else origin_deadline,
     )
     click.echo(f"walking {exp.origin} to {exp.hops} hop(s) ...")

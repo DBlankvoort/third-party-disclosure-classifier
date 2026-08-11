@@ -155,6 +155,8 @@ class Evidence:
     subject: str = UNKNOWN
     # How strongly the reading that produced the relation was supported.
     confidence: float = 0.0
+    # For observed traffic, the consent state the contact was made under.
+    consent: str = ""
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -785,6 +787,7 @@ def attach(
             track=rel.get("track") or track_for_sources(rel.get("sources")),
             subject=rel.get("subject") or UNKNOWN,
             confidence=float(rel.get("confidence") or 0.0),
+            consent=rel.get("consent") or "",
         )
         if rel.get("direction") == "upstream":
             graph.add_edge(EdgeKind.SUPPLIES, nid, tid, ev)
@@ -810,6 +813,7 @@ def attach(
             graph.add_edge(EdgeKind.CONTACTS, tid, did, Evidence(
                 source=EvidenceSource.TRAFFIC, hop=hop,
                 track=PERSONAL_DATA, subject=SITE_VISITOR,
+                consent=obs.get("consent") or "",
             ))
             graph.add_edge(EdgeKind.OWNED_BY, did, eid, Evidence(
                 source=EvidenceSource.RESOLUTION, hop=hop,

@@ -94,16 +94,13 @@ def graph_measures(graph: SharingGraph) -> dict:
             "disclosing_nothing_named": ring["silent"],
             "frontier": len(ring["frontier"]),
         }
-    deferred_ids = {nid for nid, n in graph.nodes.items() if n.deferred}
     hops = sorted(by_ring)
     for i, hop in enumerate(hops[:-1]):
         frontier = rings[hop]["frontier"]
         analysed = frontier & origins_by_hop.get(hops[i + 1], set())
-        deferred = (frontier & deferred_ids) - analysed
-        attempted = len(frontier) - len(deferred)
-        by_ring[hop]["deferred"] = len(deferred)
         by_ring[hop]["attrition_pct"] = (
-            round(100.0 * (1 - len(analysed) / attempted), 1) if attempted else None
+            round(100.0 * (1 - len(analysed) / len(frontier)), 1)
+            if frontier else None
         )
 
     roles = graph.party_roles()
@@ -167,6 +164,46 @@ def reach_measures(graph: SharingGraph) -> dict:
             "total": series[-1] if series else 0,
             "closes_at": closes,
         }
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Resolvability
+# --------------------------------------------------------------------------- #
+def resolvability_measures(graph: SharingGraph) -> dict:
+    """Why the walk stopped where it did."""
+    collected = max(
+        (n.hop_first_seen or 0 for n in graph.nodes.values() if n.expanded),
+        default=0,
+    )
+    entities = [n for n in graph.nodes.values() if n.type is NodeType.ENTITY]
+    causes: Counter = Counter()
+    for node in entities:
+        if node.expanded:
+            causes["followed"] += 1
+        elif (node.hop_first_seen or 0) > collected:
+            causes["beyond_budget"] += 1
+        elif not node.primary_domain:
+            causes["no_site"] += 1
+        else:
+            causes["not_collected"] += 1
+
+    generics = sorted(
+        (n for n in graph.nodes.values() if n.type is NodeType.GENERIC),
+        key=lambda n: n.display_name.lower(),
+    )
+    total = len(entities)
+    out = {
+        "collected_depth": collected,
+        "entities": total,
+        "unfollowed": total - causes["followed"],
+        "unfollowed_pct": _pct(total - causes["followed"], total),
+        "generic": len(generics),
+        "generic_examples": [n.display_name for n in generics[:5]],
+    }
+    for cause in ("followed", "beyond_budget", "no_site", "not_collected"):
+        out[cause] = causes[cause]
+        out[f"{cause}_pct"] = _pct(causes[cause], total)
     return out
 
 
@@ -402,6 +439,7 @@ def measure(
         "origin": origin,
         "graph": graph_measures(graph),
         "reach": reach_measures(graph),
+        "resolvability": resolvability_measures(graph),
         "corroboration": {t: corroboration(graph, track=t) for t in TRACKS},
         "chains": chain_measures(graph),
         "vocabulary": vocabulary_measures(graph),
@@ -459,7 +497,7 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
     ring_rows = [
         [f"ring {hop}", r["origins"], r["named_out_degree"]["mean"],
          r["named_out_degree"]["median"], r["named_out_degree"]["max"],
-         r["disclosing_nothing_named"], r["frontier"], r.get("deferred", 0),
+         r["disclosing_nothing_named"], r["frontier"],
          "—" if r.get("attrition_pct") is None else f"{r['attrition_pct']}%"]
         for hop, r in sorted(g["rings"].items())
     ]
@@ -505,8 +543,7 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
     </p>
     {_table(
         ["", "origins analysed", "named out-degree (mean)", "median", "max",
-         "disclosing nothing named", "next frontier", "budget deferred",
-         "attrition"],
+         "disclosing nothing named", "next frontier", "attrition"],
         ring_rows,
     )}
     {_attrition_note(g['rings'])}
@@ -515,6 +552,11 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
   <section>
     <h2>How far the data travels</h2>
     {_reach_section(m.get('reach') or {})}
+  </section>
+
+  <section>
+    <h2>How far the parties could be followed</h2>
+    {_resolvability_section(m.get('resolvability') or {})}
   </section>
 
   <section>
@@ -575,12 +617,6 @@ def _attrition_note(rings: dict) -> str:
     if not series:
         return ""
     stated = ", ".join(f"ring {hop} → {pct}%" for hop, pct in series)
-    deferred = sum(r.get("deferred", 0) for r in rings.values())
-    budget = (
-        f" A further {deferred:,} parties were reached once their ring's budget "
-        "was spent."
-        if deferred else ""
-    )
     if len(series) < 2:
         trend = (
             "Not enough data to comment on attrition."
@@ -604,10 +640,7 @@ def _attrition_note(rings: dict) -> str:
                 "which is consistent with a graph that continues to grow with "
                 "depth."
             )
-    return (
-        f"<p>Ring attrition: "
-        f"{stated}. {trend}{budget}</p>"
-    )
+    return f"<p>Ring attrition: {stated}. {trend}</p>"
 
 
 def _rings(n: int) -> str:
@@ -665,6 +698,38 @@ def _reach_section(reach: dict) -> str:
     </p>
     {_table(["", "personal data", "ad inventory"], rows)}
     <p>{settles}</p>"""
+
+
+def _resolvability_section(res: dict) -> str:
+    if not res or not res["entities"]:
+        return ('<p class="aside">No organisations were reached, so there is '
+                'nothing to report on how far they could be followed.</p>')
+    generic = ""
+    if res["generic"]:
+        examples = ", ".join(res["generic_examples"])
+        plural = "recipient is" if res["generic"] == 1 else "recipients are"
+        generic = f"""
+    <p>
+      A further {_fmt(res['generic'])} {plural} disclosed only as a category
+      ({_e(examples)}), standing for an unstated number of organisations.
+    </p>"""
+    return f"""
+    <div class="tiles">
+      {_stat_tile(res['followed'], 'followed onward',
+                  'their own disclosures were read')}
+      {_stat_tile(res['beyond_budget'], 'beyond the hop budget',
+                  'the walk stopped first')}
+      {_stat_tile(res['no_site'], 'resolved to no site',
+                  'named, with nowhere to collect')}
+      {_stat_tile(res['not_collected'], 'site yielded nothing',
+                  'fetch or analysis returned no documents')}
+    </div>
+    <p>
+      The walk collected {_rings(res['collected_depth'])} and named
+      {_fmt(res['entities'])} organisations, of which
+      {_fmt(res['unfollowed'])} ({res['unfollowed_pct']}%) were named but not
+      followed.
+    </p>{generic}"""
 
 
 def _opacity_section(corpus: dict) -> str:
