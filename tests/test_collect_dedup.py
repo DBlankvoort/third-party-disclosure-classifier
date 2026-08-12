@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tpd import lexicons
-from tpd.collect import web
+from tpd.collect import playstore, registry, web
 from tpd.collect.base import Corpus, FetchResult, Target
 
 HOME_HTML = """
@@ -23,10 +23,12 @@ def corpus(tmp_path):
     return Corpus(tmp_path / "corpus")
 
 
-def _install_fetch(monkeypatch, handler):
+def _install_fetch(monkeypatch, handler, *modules):
     def _fetch(url, cache_dir=None, timeout=15, force=False, delay=0.0):
         return handler(url)
-    monkeypatch.setattr(web, "fetch", _fetch)
+    for mod in (web, registry, *modules):
+        monkeypatch.setattr(mod, "fetch", _fetch)
+    monkeypatch.setattr(registry, "warm_cache", lambda *a, **k: None)
 
 
 class TestRedirectToOnePage:
@@ -95,6 +97,137 @@ class TestHelpDocDiscovery:
     def test_ignores_content_links(self, hay):
         pattern = dict(lexicons.LINK_DISCOVERY)["help_doc"]
         assert not pattern.search(hay)
+
+
+class TestConventionalPathRedirect:
+    def test_policy_search_continues_past_home_redirect(self, corpus, monkeypatch):
+        def handler(url):
+            path = url.rstrip("/").removeprefix("https://example.com")
+            if path == "/privacy":
+                return FetchResult(
+                    url=url, status=200, content_type="text/html",
+                    text="<html><head><title>Example</title></head><body>"
+                         "<p>Welcome.</p></body></html>",
+                    final_url="https://example.com/")
+            if path == "/privacy-policy":
+                return FetchResult(
+                    url=url, status=200, content_type="text/html",
+                    text="<html><head><title>Privacy</title></head><body>"
+                         "<p>We share data with partners.</p></body></html>",
+                    final_url=url)
+            return FetchResult(url=url, status=404, content_type="", text="")
+
+        _install_fetch(monkeypatch, handler)
+        docs = web.collect_website(
+            Target(id="website__example", type="website", url="https://example.com"),
+            corpus,
+        )
+        policies = [d for d in docs if d.role == "privacy_policy"]
+        assert len(policies) == 1
+        assert policies[0].url.endswith("/privacy-policy")
+
+    def test_companion_probe_rejects_home_redirect(self, corpus, monkeypatch):
+        def handler(url):
+            if url.rstrip("/") == "https://example.com":
+                return FetchResult(
+                    url=url, status=200, content_type="text/html",
+                    text="<html><head><title>Example</title></head><body>"
+                         "<p>Welcome.</p></body></html>",
+                    final_url=url)
+            # Every other path is served the homepage by redirect.
+            return FetchResult(
+                url=url, status=200, content_type="text/html",
+                text="<html><head><title>Example</title></head><body>"
+                     "<p>Welcome.</p></body></html>",
+                final_url="https://example.com/")
+
+        _install_fetch(monkeypatch, handler)
+        docs = web.collect_website(
+            Target(id="website__example", type="website", url="https://example.com"),
+            corpus,
+        )
+        assert docs == []
+
+    def test_homepage_below_root_is_recognised(self, corpus, monkeypatch):
+        def handler(url):
+            if url.rstrip("/") == "https://example.com/us":
+                return FetchResult(
+                    url=url, status=200, content_type="text/html",
+                    text="<html><head><title>Example</title></head><body>"
+                         "<p>Welcome.</p></body></html>",
+                    final_url=url)
+            return FetchResult(
+                url=url, status=200, content_type="text/html",
+                text="<html><head><title>Example</title></head><body>"
+                     "<p>Welcome.</p></body></html>",
+                final_url="https://example.com/us/")
+
+        _install_fetch(monkeypatch, handler)
+        docs = web.collect_website(
+            Target(id="website__example", type="website", url="https://example.com/us"),
+            corpus,
+        )
+        assert docs == []
+
+
+ADS_TXT = "google.com, pub-0000000000000000, DIRECT, f08c47fec0942fa0\n"
+
+
+class TestRegistryFiles:
+    def test_website_collects_ads_txt(self, corpus, monkeypatch):
+        def handler(url):
+            if url == "https://example.com/ads.txt":
+                return FetchResult(url=url, status=200, content_type="text/plain",
+                                   text=ADS_TXT, final_url=url)
+            if url.rstrip("/") == "https://example.com":
+                return FetchResult(url=url, status=200, content_type="text/html",
+                                   text=HOME_HTML, final_url=url)
+            return FetchResult(url=url, status=404, content_type="", text="")
+
+        _install_fetch(monkeypatch, handler)
+        docs = web.collect_website(
+            Target(id="website__example", type="website", url="https://example.com"),
+            corpus,
+        )
+        ads = [d for d in docs if d.role == "ads_txt"]
+        assert len(ads) == 1
+        assert corpus.read_doc_html(ads[0]) == ADS_TXT
+        _, saved = corpus.read_manifest("website__example")
+        assert "ads_txt" in {d.role for d in saved}
+
+    def test_play_app_collects_app_ads_txt_from_developer_domain(
+        self, corpus, monkeypatch
+    ):
+        def handler(url):
+            if url == "https://dev.example/app-ads.txt":
+                return FetchResult(url=url, status=200, content_type="text/plain",
+                                   text=ADS_TXT, final_url=url)
+            if url.startswith("https://play.google.com/"):
+                return FetchResult(
+                    url=url, status=200, content_type="text/html",
+                    text="<html><head><title>App</title></head><body>"
+                         '<a href="https://dev.example/privacy">Privacy Policy</a>'
+                         "</body></html>",
+                    final_url=url)
+            if url == "https://dev.example/privacy":
+                return FetchResult(
+                    url=url, status=200, content_type="text/html",
+                    text="<html><head><title>Privacy</title></head><body>"
+                         "<p>We share data with partners.</p></body></html>",
+                    final_url=url)
+            return FetchResult(url=url, status=404, content_type="", text="")
+
+        _install_fetch(monkeypatch, handler, playstore)
+        docs = playstore.collect_play_app(
+            Target(id="play_store_app__example", type="play_store_app",
+                   app_id="com.example.app"),
+            corpus,
+        )
+        roles = {d.role for d in docs}
+        assert "app_ads_txt" in roles
+        assert {d.url for d in docs if d.role == "app_ads_txt"} == {
+            "https://dev.example/app-ads.txt"
+        }
 
 
 class TestEmptyBody:

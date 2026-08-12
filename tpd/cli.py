@@ -67,7 +67,7 @@ def collect(seeds_path, corpus_root, per_type, workers, oversample, seed, delay,
     click.echo(f"collected {report.usable} USABLE targets "
                 f"(of {report.attempted} attempted) into {corpus_root}")
     click.echo(f"{report.registry_docs} registry document(s), "
-               f"{report.disclosure_docs} disclosure document(s) back-filled")
+               f"{report.disclosure_docs} companion disclosure document(s)")
 
     if no_render:
         return

@@ -11,22 +11,15 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 import sys
-from urllib.parse import urljoin, urlparse
 
-from .. import lexicons
 from ..typology import TargetType
-from .base import CollectedDoc, Corpus, Target, fetch, warm_cache
+from .base import CollectedDoc, Corpus, Target
 from ..classify.document_class import classify_medium
 from ..extract import parse_html
 from .appstore import collect_app_store_app
 from .playstore import collect_play_app
-from .web import (
-    COMMON_COMPANION_PATHS,
-    collect_website,
-    _content_key,
-    _discover_links,
-    _same_site,
-)
+from .registry import REGISTRY_ROLES
+from .web import collect_website
 
 _DISPATCH = {
     TargetType.WEBSITE.value: collect_website,
@@ -39,9 +32,10 @@ _DISPATCH = {
 _USABILITY_MAX_BYTES = 400_000
 
 
-def collect_target(
+def fetch_target(
     target: Target, corpus: Corpus, force: bool = False, delay: float = 0.3
 ) -> list[CollectedDoc]:
+    """Collect ``target``'s whole document set."""
     fn = _DISPATCH.get(target.type)
     if fn is None:
         raise ValueError(f"unknown target type: {target.type!r}")
@@ -187,189 +181,6 @@ def collect_stratified(
             progress(Target(id="", type=ttype),
                      f"== {ttype}: {usable} usable from {attempted} attempts ==")
     return out, usable_ids
-
-_WEB_TYPES = {TargetType.WEBSITE.value, TargetType.DATA_BROKER.value}
-# Companion disclosure roles worth back-filling.
-_BACKFILL_ROLES = {"vendor_list", "subprocessor_list", "do_not_sell", "partners_page"}
-
-
-def _policy_host(docs: list[CollectedDoc]) -> str:
-    for d in docs:
-        if d.role == "privacy_policy" and d.url:
-            return urlparse(d.url).netloc
-    return ""
-
-
-def augment_disclosure_target(
-    corpus: Corpus,
-    target: Target,
-    docs: list[CollectedDoc],
-    force: bool = False,
-    delay: float = 0.3,
-) -> list[CollectedDoc]:
-    """Discover + append missing companion disclosure docs."""
-    if target.type not in _WEB_TYPES:
-        return []
-    existing_roles = {d.role for d in docs}
-    existing_urls = {d.url for d in docs}
-    base_host = urlparse(target.url).netloc if target.url else ""
-    policy_host = _policy_host(docs)
-
-    # 1. Candidate (url -> role) from links in the already-saved documents
-    #    + a live re-fetch of the homepage.
-    candidates: dict[str, str] = {}
-    htmls = [(corpus.read_doc_html(d), d.url) for d in docs if d.ok]
-    if target.url:
-        hr = fetch(target.url, cache_dir=corpus.cache_dir, force=force, delay=delay)
-        if hr.ok and hr.text:
-            htmls.append((hr.text, hr.final_url or target.url))
-    for html, base in htmls:
-        for role, urls in _discover_links(html, base).items():
-            for url in urls:
-                if (role in _BACKFILL_ROLES and role not in existing_roles
-                        and url not in existing_urls
-                        and _same_site(url, base_host, policy_host)):
-                    candidates.setdefault(url, role)
-
-    # 2. Conventional paths still missing.
-    roots = []
-    for h in (base_host, policy_host):
-        if h and (r := f"https://{h}") not in roots:
-            roots.append(r)
-    for role, paths in COMMON_COMPANION_PATHS:
-        if role not in _BACKFILL_ROLES or role in existing_roles:
-            continue
-        if any(r == role for r in candidates.values()):
-            continue
-        for root in roots:
-            for path in paths:
-                candidates.setdefault(urljoin(root + "/", path.lstrip("/")), role)
-
-    # 3. Fetch candidates
-    per_role_warm: dict[str, int] = {}
-    warm: list[str] = []
-    for url, role in candidates.items():
-        if per_role_warm.get(role, 0) < lexicons.MAX_DOCS_PER_ROLE:
-            per_role_warm[role] = per_role_warm.get(role, 0) + 1
-            warm.append(url)
-    warm_cache(warm, corpus.cache_dir, force=force, delay=delay)
-
-    seen_hashes = {_content_key(corpus.read_doc_html(d)) for d in docs if d.ok}
-    seen_urls = {(d.url or "").rstrip("/") for d in docs if d.ok}
-    per_role: dict[str, int] = {}
-    new_docs: list[CollectedDoc] = []
-    base_idx = len(docs)
-    warmed = set(warm)
-    for url, role in candidates.items():
-        if per_role.get(role, 0) >= lexicons.MAX_DOCS_PER_ROLE:
-            continue
-        res = fetch(url, cache_dir=corpus.cache_dir, delay=delay,
-                    force=force and url not in warmed)
-        if not (res.ok and res.text):
-            continue
-        final = (res.final_url or url).rstrip("/")
-        if final in seen_urls:
-            continue
-        key = _content_key(res.text)
-        if key in seen_hashes:
-            continue
-        seen_urls.add(final)
-        per_role[role] = per_role.get(role, 0) + 1
-        doc = CollectedDoc(
-            doc_id=f"{role}-{base_idx + len(new_docs):02d}",
-            url=res.final_url or url,
-            role=role,
-            http_status=res.status,
-            content_type=res.content_type,
-            fetched_at=time.time(),
-        )
-        corpus.save_doc(target.id, doc, res.text)
-        seen_hashes.add(key)
-        new_docs.append(doc)
-    if new_docs:
-        corpus.write_manifest(target, docs + new_docs)
-    return new_docs
-
-
-# (conventional path, doc role) per target type.
-_WEB_PATHS = [
-    ("/ads.txt", "ads_txt"),
-    ("/sellers.json", "sellers_json"),
-    ("/vendors.json", "vendors_json"),
-]
-_APP_PATHS = [
-    ("/app-ads.txt", "app_ads_txt"),
-    ("/sellers.json", "sellers_json"),
-    ("/vendors.json", "vendors_json"),
-]
-_APP_TYPES = {TargetType.PLAY_STORE_APP.value, TargetType.APP_STORE_APP.value}
-
-
-def registry_paths_for(target_type: str) -> list[tuple[str, str]]:
-    return _APP_PATHS if target_type in _APP_TYPES else _WEB_PATHS
-
-
-def _root_url(target: Target, docs: list[CollectedDoc]) -> str:
-    """Find the best host root for a target's domain."""
-    skip = ("play.google.com", "itunes.apple.com", "apps.apple.com", "policies.google.com")
-    for cand in (target.seed_policy_url, target.url, *(d.url for d in docs if d.role == "privacy_policy"),
-                 *(d.url for d in docs)):
-        if not cand:
-            continue
-        p = urlparse(cand)
-        if p.netloc and not any(s in p.netloc for s in skip):
-            return f"{p.scheme or 'https'}://{p.netloc}"
-    return ""
-
-
-def augment_target(
-    corpus: Corpus,
-    target: Target,
-    docs: list[CollectedDoc],
-    force: bool = False,
-    delay: float = 0.3,
-) -> list[CollectedDoc]:
-    """Fetch registry files."""
-    root = _root_url(target, docs)
-    if not root:
-        return []
-    existing_roles = {d.role for d in docs}
-    new_docs: list[CollectedDoc] = []
-    base_idx = len(docs)
-    wanted = [(urljoin(root + "/", path.lstrip("/")), role)
-              for path, role in registry_paths_for(target.type)
-              if role not in existing_roles]
-    warm_cache([u for u, _ in wanted], corpus.cache_dir, force=force, delay=delay)
-    for url, role in wanted:
-        res = fetch(url, cache_dir=corpus.cache_dir, delay=delay)
-        kind = lexicons.machine_readable_kind(res.text) if (res.ok and res.text) else ""
-        if not kind:
-            continue  # dead URL / 404 HTML / empty
-        doc = CollectedDoc(
-            doc_id=f"{role}-{base_idx + len(new_docs):02d}",
-            url=res.final_url or url,
-            role=role,
-            http_status=res.status,
-            content_type=res.content_type,
-            fetched_at=time.time(),
-        )
-        corpus.save_doc(target.id, doc, res.text)
-        new_docs.append(doc)
-    if new_docs:
-        corpus.write_manifest(target, docs + new_docs)
-    return new_docs
-
-
-def fetch_target(
-    target: Target, corpus: Corpus, force: bool = False, delay: float = 0.3
-) -> list[CollectedDoc]:
-    """Collect a target and immediately back-fill its registry + companion
-    disclosure docs, so a single fetch produces the whole document set.
-    """
-    docs = collect_target(target, corpus, force=force, delay=delay)
-    docs = docs + augment_target(corpus, target, docs, force=force, delay=delay)
-    docs = docs + augment_disclosure_target(corpus, target, docs, force=force, delay=delay)
-    return docs
 
 
 # Controls that reveal a hidden CMP / cookie vendor list.
@@ -609,8 +420,7 @@ def render_thin_docs(
     return updated
 
 
-# Roles produced by the per-target augment steps folded into fetch_target.
-_REGISTRY_ROLES = {role for _, role in _WEB_PATHS + _APP_PATHS}
+_DISCLOSURE_ROLES = {"vendor_list", "subprocessor_list", "do_not_sell", "partners_page"}
 
 
 @dataclass
@@ -640,8 +450,7 @@ def run_collection(
     render_limit: int = 0,
     progress=None,
 ) -> CollectionReport:
-    """Run the full fetcher pipeline: stratified crawl (with registry and
-    disclosure back-fill folded into each target's fetch), then an optional
+    """Run the full fetcher pipeline: a stratified crawl, then an optional
     JS-render pass over the resulting corpus.
     """
     report = CollectionReport()
@@ -653,8 +462,8 @@ def run_collection(
     report.attempted = len(report.collected)
     report.usable = len(usable_ids)
     all_docs = [d for docs in report.collected.values() for d in docs]
-    report.registry_docs = sum(1 for d in all_docs if d.role in _REGISTRY_ROLES)
-    report.disclosure_docs = sum(1 for d in all_docs if d.role in _BACKFILL_ROLES)
+    report.registry_docs = sum(1 for d in all_docs if d.role in REGISTRY_ROLES)
+    report.disclosure_docs = sum(1 for d in all_docs if d.role in _DISCLOSURE_ROLES)
 
     if render:
         report.rendered, report.updated, report.failed = render_corpus(

@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 
 from ..extract import parse_html
 from .base import CollectedDoc, Corpus, Target, fetch
+from .registry import collect_registry_docs
 
 LOOKUP_URL = "https://itunes.apple.com/lookup?id={app_id}&country=US"
 LOOKUP_BUNDLE_URL = "https://itunes.apple.com/lookup?bundleId={bundle}&country=US"
@@ -88,6 +89,8 @@ def collect_app_store_app(
             )
             if nested_policy_url:
                 _save(nested_policy_url, "privacy_policy")
+
+    docs.extend(collect_registry_docs(corpus, target, docs, force=force, delay=delay))
 
     corpus.write_manifest(target, docs)
     return docs

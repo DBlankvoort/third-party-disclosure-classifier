@@ -20,6 +20,7 @@ from .base import (
     fetch,
     warm_cache,
 )
+from .registry import collect_registry_docs
 
 
 def _content_key(text: str) -> str:
@@ -49,6 +50,12 @@ _COMPANION_ROLES = {
     "subprocessor_list", "dpa", "cookie_policy", "vendor_list",
     "do_not_sell", "partners_page", "help_doc",
 }
+
+
+def _is_site_root(url: str) -> bool:
+    """True if ``url`` addresses a site root rather than a document within it."""
+    parsed = urlparse(url)
+    return not parsed.path.strip("/") and not parsed.query
 
 
 def _rank_policy_url(url: str) -> tuple:
@@ -118,8 +125,18 @@ def collect_website(
         warmed.add(url)
         return res
 
-    def _save(url: str, role: str, dedup: bool = False) -> CollectedDoc | None:
+    def _redirected_home(res: FetchResult, url: str) -> bool:
+        """True if fetching ``url`` landed on a homepage instead."""
+        final = (res.final_url or url).rstrip("/")
+        if final == url.rstrip("/"):
+            return False
+        return _is_site_root(final) or final == home
+
+    def _save(url: str, role: str, dedup: bool = False,
+              reject_home: bool = False) -> CollectedDoc | None:
         res = _fetch(url)
+        if reject_home and _redirected_home(res, url):
+            return None
         if (res.final_url or url).rstrip("/") in saved_urls:
             return None
         # Content de-dup
@@ -161,7 +178,7 @@ def collect_website(
     if policy_doc is None and home:
         for path in COMMON_POLICY_PATHS:
             cand = urljoin(home + "/", path.lstrip("/"))
-            policy_doc = _save(cand, "privacy_policy")
+            policy_doc = _save(cand, "privacy_policy", reject_home=True)
             if policy_doc is not None:
                 break
 
@@ -216,7 +233,8 @@ def collect_website(
                 cand = urljoin(root + "/", path.lstrip("/"))
                 if cand in seen_urls:
                     continue
-                if _fetch(cand).ok:
+                res = _fetch(cand)
+                if res.ok and not _redirected_home(res, cand):
                     return cand
         return ""
 
@@ -225,8 +243,11 @@ def collect_website(
             hits = list(pool.map(probe, [paths for _, paths in pending]))
         for (role, _), cand in zip(pending, hits, strict=True):
             if cand and cand not in seen_urls:
-                _save(cand, role, dedup=True)
+                _save(cand, role, dedup=True, reject_home=True)
                 seen_urls.add(cand)
+
+    # 6. registry files on the target's domain ------------------------------ #
+    docs.extend(collect_registry_docs(corpus, target, docs, force=force, delay=delay))
 
     corpus.write_manifest(target, docs)
     return docs

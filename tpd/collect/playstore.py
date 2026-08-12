@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 
 from ..extract import parse_html
 from .base import CollectedDoc, Corpus, Target, fetch
+from .registry import collect_registry_docs
 
 DETAILS_URL = "https://play.google.com/store/apps/details?id={app_id}&hl=en&gl=US"
 DATASAFETY_URL = "https://play.google.com/store/apps/datasafety?id={app_id}&hl=en&gl=US"
@@ -73,6 +74,8 @@ def collect_play_app(
                     break
     if policy_url:
         _save(policy_url, "privacy_policy")
+
+    docs.extend(collect_registry_docs(corpus, target, docs, force=force, delay=delay))
 
     corpus.write_manifest(target, docs)
     return docs
