@@ -68,7 +68,7 @@ def _rank_policy_url(url: str) -> tuple:
         len(path),
     )
 
-_TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=())
+_TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
 
 
 def _registrable(host: str) -> str:

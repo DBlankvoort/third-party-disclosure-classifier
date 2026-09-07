@@ -8,7 +8,7 @@ from tpd.entities import (
     entity_for_domain,
     registrable_domain,
 )
-from tpd.traffic import observed_hosts, traffic_relations
+from tpd.traffic import observed_hosts
 
 
 class TestCleanCompanyName:
@@ -86,17 +86,3 @@ class TestObservedHosts:
     def test_first_party_tokens_are_honoured(self):
         reqs = [{"url": "https://static.guim.co.uk/x.js", "type": "script"}]
         assert observed_hosts(reqs, self.ORIGIN, first_party={"guim"}) == []
-
-
-class TestTrafficRelations:
-    def test_relations_carry_the_traffic_source(self):
-        rels = traffic_relations(
-            [{"url": "https://securepubads.g.doubleclick.net/t.js", "type": "script"}],
-            "https://example.com",
-        )
-        assert [r["sources"] for r in rels] == [["traffic"]]
-        assert rels[0]["entity"] == "google"
-        assert rels[0]["direction"] == "downstream"
-
-    def test_no_requests_yields_no_relations(self):
-        assert traffic_relations([], "https://example.com") == []

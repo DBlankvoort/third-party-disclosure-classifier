@@ -6,22 +6,6 @@ from urllib.parse import urlparse
 
 from .entities import canonical_key, entity_for_domain, registrable_domain
 from .probe import PRE_CONSENT
-from .tracks import PERSONAL_DATA, SITE_VISITOR
-
-_TYPE_DATA = {
-    "script": ("cookie / device identifiers", ["services"]),
-    "xmlhttprequest": ("cookie / device identifiers", ["services"]),
-    "image": ("cookie / device identifiers", ["advertising"]),
-    "imageset": ("cookie / device identifiers", ["advertising"]),
-    "beacon": ("usage data", ["analytics"]),
-    "ping": ("usage data", ["analytics"]),
-    "media": ("usage data", ["services"]),
-    "font": ("technical data", ["services"]),
-    "stylesheet": ("technical data", ["services"]),
-    "sub_frame": ("cookie / device identifiers", ["advertising"]),
-    "websocket": ("usage data", ["services"]),
-}
-_DEFAULT_DATA = ("technical data", ["services"])
 
 INFRASTRUCTURE_DOMAINS = {
     "gstatic.com", "jsdelivr.net", "unpkg.com", "bootstrapcdn.com",
@@ -98,44 +82,4 @@ def observed_hosts(
             "requests": rec["requests"],
         })
     out.sort(key=lambda r: (-r["requests"], r["entity"].lower()))
-    return out
-
-
-def traffic_relations(
-    requests,
-    origin: str,
-    first_party: set[str] | None = None,
-    include_infrastructure: bool = False,
-) -> list[dict]:
-    """Data-sharing relations synthesised from observed requests."""
-    from .classify.structured_relations import DOWNSTREAM
-
-    out: list[dict] = []
-    for rec in observed_hosts(requests, origin, first_party, include_infrastructure):
-        seen: set[str] = set()
-        for rtype in rec["types"]:
-            data_type, purposes = _TYPE_DATA.get(rtype, _DEFAULT_DATA)
-            if data_type in seen:
-                continue
-            seen.add(data_type)
-            out.append({
-                "entity": rec["entity"].strip().lower(),
-                "party": "third",
-                "unspecified": False,
-                "data_type": data_type,
-                "action": "collect",
-                "negative": False,
-                "direction": DOWNSTREAM,
-                "track": PERSONAL_DATA,
-                "subject": SITE_VISITOR,
-                "grounded": True,
-                "purposes": list(purposes),
-                "examples": [],
-                "qualifier": rec["basis"],
-                "consent": rec["consent"],
-                "sources": ["traffic"],
-                "text": (f"{rec['requests']} request(s) to "
-                         f"{', '.join(rec['domains'][:3])}"),
-                "doc_ids": [],
-            })
     return out

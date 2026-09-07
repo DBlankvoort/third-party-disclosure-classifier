@@ -18,7 +18,6 @@ from .entities import (
 )
 from .tracks import (
     PERSONAL_DATA,
-    SITE_VISITOR,
     TRACKS,
     UNKNOWN,
     carries_upstream_data,
@@ -45,6 +44,20 @@ class EvidenceSource(str, Enum):
     REGISTRY = "registry"
     TRAFFIC = "traffic"
     RESOLUTION = "resolution"
+
+
+class EvidenceType(str, Enum):
+    POLICY_RELATION = "policy_relation"
+    STRUCTURED_TABLE_RELATION = "structured_table_relation"
+    ADS_TXT_AUTHORISATION = "ads_txt_authorisation"
+    SELLERS_JSON_PARTICIPATION = "sellers_json_participation"
+    TCF_VENDOR_REGISTRATION = "tcf_vendor_registration"
+    CMP_VENDOR_LISTING = "cmp_vendor_listing"
+    NETWORK_CONTACT = "network_contact"
+    OBSERVED_TRANSMISSION = "observed_transmission"
+    NAME_RESOLUTION = "name_resolution"
+    DOMAIN_RESOLUTION = "domain_resolution"
+    MANUAL_CORRECTION = "manual_correction"
 
 
 GENERIC_PREFIX = "generic::"
@@ -142,6 +155,7 @@ class Node:
 @dataclass
 class Evidence:
     source: EvidenceSource
+    evidence_type: EvidenceType | None = None
     observed_at: str = field(default_factory=_now)
     hop: int = 0
     doc_ids: list[str] = field(default_factory=list)
@@ -161,6 +175,8 @@ class Evidence:
     def to_dict(self) -> dict:
         d = asdict(self)
         d["source"] = self.source.value
+        if self.evidence_type is not None:
+            d["evidence_type"] = self.evidence_type.value
         return d
 
     @classmethod
@@ -168,6 +184,8 @@ class Evidence:
         known = {f.name for f in fields(cls)}
         d = {k: v for k, v in d.items() if k in known}
         d["source"] = EvidenceSource(d["source"])
+        if d.get("evidence_type"):
+            d["evidence_type"] = EvidenceType(d["evidence_type"])
         return cls(**d)
 
 
@@ -704,6 +722,23 @@ def _evidence_source(relation: dict) -> EvidenceSource:
     return EvidenceSource.POLICY
 
 
+def _evidence_type(relation: dict) -> EvidenceType:
+    sources = set(relation.get("sources") or ())
+    if "traffic" in sources:
+        return EvidenceType.NETWORK_CONTACT
+    if "cmp" in sources:
+        return EvidenceType.CMP_VENDOR_LISTING
+    if sources & {"ads_txt", "app_ads_txt"}:
+        return EvidenceType.ADS_TXT_AUTHORISATION
+    if "sellers_json" in sources:
+        return EvidenceType.SELLERS_JSON_PARTICIPATION
+    if sources & {"tcf_gvl", "vendors_json"}:
+        return EvidenceType.TCF_VENDOR_REGISTRATION
+    if sources & {"cookie_table", "vendor_table"}:
+        return EvidenceType.STRUCTURED_TABLE_RELATION
+    return EvidenceType.POLICY_RELATION
+
+
 def add_target(
     graph: SharingGraph,
     target_id: str,
@@ -778,7 +813,7 @@ def attach(
         if attested and attested not in purposes:
             purposes.append(attested)
         ev = Evidence(
-            source=_evidence_source(rel), hop=hop,
+            source=_evidence_source(rel), evidence_type=_evidence_type(rel), hop=hop,
             doc_ids=list(rel.get("doc_ids") or ()),
             snippet=rel.get("text") or "",
             data_type=rel.get("data_type") or "",
@@ -811,12 +846,14 @@ def attach(
                 hop_first_seen=hop + 1,
             ))
             graph.add_edge(EdgeKind.CONTACTS, tid, did, Evidence(
-                source=EvidenceSource.TRAFFIC, hop=hop,
-                track=PERSONAL_DATA, subject=SITE_VISITOR,
+                source=EvidenceSource.TRAFFIC,
+                evidence_type=EvidenceType.NETWORK_CONTACT, hop=hop,
+                track="", subject=UNKNOWN,
                 consent=obs.get("consent") or "",
             ))
             graph.add_edge(EdgeKind.OWNED_BY, did, eid, Evidence(
-                source=EvidenceSource.RESOLUTION, hop=hop,
+                source=EvidenceSource.RESOLUTION,
+                evidence_type=EvidenceType.DOMAIN_RESOLUTION, hop=hop,
                 snippet=obs.get("basis", ""),
-                track=PERSONAL_DATA, subject=SITE_VISITOR,
+                track="", subject=UNKNOWN,
             ))

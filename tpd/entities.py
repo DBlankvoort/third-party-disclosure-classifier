@@ -15,7 +15,7 @@ from .kb import blocklist, gvl, jurisdiction, tracker_radar
 from .lexicons import CATEGORY_RE
 
 # The public suffix list is resolved offline.
-_TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=())
+_TLD_EXTRACTOR = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
 
 # Corporate-form tokens, matched at the end of a name.
 _SUFFIX_TOKENS = [

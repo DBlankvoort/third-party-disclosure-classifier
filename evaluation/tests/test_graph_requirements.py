@@ -97,15 +97,13 @@ class TestChainEnumeration:
         expand_node(g, entity_node_id("Charlie"), [_rel("Delta")], hop=2)
         assert not sharing_chains(g, parties=4)
 
-    def test_a_contact_and_its_ownership_count_as_one_hop(self):
+    def test_a_contact_does_not_count_as_a_personal_data_hop(self):
         g = SharingGraph()
         add_target(g, "site", "site.example", [], observed=[
             {"entity": "Google", "basis": "domain_map",
              "domains": ["doubleclick.net"], "types": ["script"], "requests": 1},
         ])
-        (chain,) = sharing_chains(g, parties=2)
-        assert chain.parties == [target_node_id("site"), entity_node_id("Google")]
-        assert chain.hops[0].via_domain == "domain::doubleclick.net"
+        assert sharing_chains(g, parties=2) == []
 
     def test_the_budget_is_shared_across_starting_parties(self):
         # A hub sitting on more chains than the limit would otherwise consume

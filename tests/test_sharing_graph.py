@@ -5,6 +5,7 @@ from __future__ import annotations
 from tpd.sharing_graph import (
     EdgeKind,
     EvidenceSource,
+    EvidenceType,
     Node,
     NodeType,
     SharingGraph,
@@ -42,6 +43,22 @@ class TestAddTarget:
         assert key in g.edges
         assert g.edges[key].sources == {"registry"}
 
+    def test_specific_relation_provenance_survives_graph_construction(self):
+        cases = {
+            "policy": EvidenceType.POLICY_RELATION,
+            "cookie_table": EvidenceType.STRUCTURED_TABLE_RELATION,
+            "vendor_table": EvidenceType.STRUCTURED_TABLE_RELATION,
+            "ads_txt": EvidenceType.ADS_TXT_AUTHORISATION,
+            "sellers_json": EvidenceType.SELLERS_JSON_PARTICIPATION,
+            "tcf_gvl": EvidenceType.TCF_VENDOR_REGISTRATION,
+            "cmp": EvidenceType.CMP_VENDOR_LISTING,
+        }
+        for index, (source, expected) in enumerate(cases.items()):
+            g = SharingGraph()
+            add_target(g, str(index), str(index), [_rel("Criteo", sources=[source])])
+            edge = next(iter(g.edges.values()))
+            assert edge.evidence[0].evidence_type is expected
+
     def test_first_party_relations_are_skipped(self):
         g = SharingGraph()
         add_target(g, "t", "t", [_rel("example", party="first")])
@@ -63,6 +80,22 @@ class TestAddTarget:
         assert (EdgeKind.CONTACTS.value, tid, "domain::doubleclick.net") in g.edges
         assert (EdgeKind.OWNED_BY.value, "domain::doubleclick.net",
                 entity_node_id("Google")) in g.edges
+
+    def test_network_contacts_do_not_become_personal_data_relations(self):
+        g = SharingGraph()
+        tid = add_target(g, "t", "t", [], observed=[
+            {"entity": "Google", "basis": "domain_map",
+             "domains": ["doubleclick.net"], "types": ["script"], "requests": 2},
+        ])
+        assert not any(
+            edge.kind is EdgeKind.DISCLOSES_SHARING_WITH
+            for edge in g.out_edges(tid)
+        )
+        edge = g.edges[(EdgeKind.CONTACTS.value, tid, "domain::doubleclick.net")]
+        assert edge.evidence[0].evidence_type is EvidenceType.NETWORK_CONTACT
+        assert edge.evidence[0].data_type == ""
+        assert edge.evidence[0].purposes == []
+        assert edge.evidence[0].track == ""
 
     def test_unspecified_parties_become_generic_nodes(self):
         g = SharingGraph()
@@ -127,6 +160,7 @@ class TestSerialisation:
         assert set(back.edges) == set(g.edges)
         (edge,) = list(back.edges.values())
         assert edge.evidence[0].source is EvidenceSource.POLICY
+        assert edge.evidence[0].evidence_type is EvidenceType.POLICY_RELATION
         assert edge.evidence[0].snippet == "we share with Criteo"
 
 

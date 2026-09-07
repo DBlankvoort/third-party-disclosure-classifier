@@ -5,9 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tpd.collect.base import Corpus
-from tpd.collect.runner import fetch_target
-from tpd.expand import origin_of, target_for_origin
 from tpd.classify.named_entities import first_party_tokens
 from tpd.classify.named_relations import named_org_relations
 from tpd.classify.poligraph_connector import (
@@ -15,13 +12,15 @@ from tpd.classify.poligraph_connector import (
     poligraph_available,
     target_relations,
 )
-from tpd.classify.structured_relations import structured_relations_for_target
 from tpd.classify.run import classify_corpus
+from tpd.classify.structured_relations import structured_relations_for_target
 from tpd.cmp import cmp_relations, cmp_vendors
+from tpd.collect.base import Corpus
+from tpd.collect.runner import fetch_target
+from tpd.expand import origin_of, target_for_origin
 from tpd.extract import parse_html
-from tpd.traffic import observed_hosts, traffic_relations
+from tpd.traffic import observed_hosts
 from tpd.typology import media_of
-
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}")
 # False positives for e-mails.
@@ -168,12 +167,11 @@ def analyze_url(
     )
     # Observed requests name parties the documents may omit entirely.
     observed = observed_hosts(requests, origin, first_party=first_party)
-    traffic_rels = traffic_relations(requests, origin, first_party=first_party)
     # The consent dialog names parties the crawled documents never render.
     cmp_parties = cmp_vendors(cmp, first_party=first_party)
     cmp_rels = cmp_relations(cmp, first_party=first_party)
     sharing = merge_relations(
-        [prose_rels, structured_rels, named_rels, traffic_rels, cmp_rels]
+        [prose_rels, structured_rels, named_rels, cmp_rels]
     )
 
     # Per-document view.

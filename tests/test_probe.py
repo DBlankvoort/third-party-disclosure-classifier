@@ -9,7 +9,7 @@ from tpd.probe import (
     merge_requests,
 )
 from tpd.sharing_graph import EdgeKind, SharingGraph, add_target, target_node_id
-from tpd.traffic import consent_state, observed_hosts, traffic_relations
+from tpd.traffic import consent_state, observed_hosts
 
 ORIGIN = "https://example.com"
 
@@ -82,10 +82,6 @@ class TestObservedConsent:
         by_entity = {o["entity"]: o["consent"]
                      for o in observed_hosts(self.REQUESTS, ORIGIN)}
         assert by_entity == {"Google": POST_CONSENT, "Skimlinks": PRE_CONSENT}
-
-    def test_relations_carry_the_consent_state(self):
-        rels = traffic_relations(self.REQUESTS, ORIGIN)
-        assert {r["consent"] for r in rels if r["entity"] == "google"} == {POST_CONSENT}
 
     def test_contact_edges_carry_the_consent_state(self):
         graph = SharingGraph()

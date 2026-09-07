@@ -35,7 +35,7 @@ from .sharing_graph import (
     add_target,
     expand_node,
 )
-from .traffic import observed_hosts, traffic_relations
+from .traffic import observed_hosts
 from .typology import TargetType
 
 FETCH_WORKERS = 8
@@ -113,7 +113,6 @@ def analyse_origin(
     relations = merge_relations([
         relations_for_target(corpus, target.id, docs, first_party,
                              target_type=target.type),
-        traffic_relations(requests, origin, first_party=first_party),
         cmp_relations(cmp, first_party=first_party),
     ])
     observed = observed_hosts(requests, origin, first_party=first_party)
