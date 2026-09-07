@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import time
+
+from tpd import expand as expand_mod
+from tpd import probe as probe_mod
+from tpd.collect.base import Corpus
 from tpd.probe import (
     POST_CONSENT,
     PRE_CONSENT,
     _is_accept,
+    cached_probe,
     merge_requests,
+    read_probe,
 )
 from tpd.sharing_graph import EdgeKind, SharingGraph, add_target, target_node_id
 from tpd.traffic import consent_state, observed_hosts
@@ -95,3 +103,106 @@ class TestObservedConsent:
             for ev in edge.evidence
         }
         assert states == {PRE_CONSENT, POST_CONSENT}
+
+
+# --------------------------------------------------------------------------- #
+# The stored capture the popup and the graph share
+# --------------------------------------------------------------------------- #
+_PROBED = [{"url": "https://doubleclick.net/px", "type": "image",
+            "consent": PRE_CONSENT}]
+
+
+def _stub_probe(monkeypatch, requests=_PROBED, accepted="Accept all"):
+    """Stand in for the browser launch, recording how often it happens."""
+    calls: list[str] = []
+
+    def fake(origin, **kwargs):
+        calls.append(origin)
+        return list(requests), accepted
+
+    monkeypatch.setattr(probe_mod, "probe_origin", fake)
+    return calls
+
+
+class TestCachedProbe:
+    SITE = "https://www.smbc-comics.com"
+
+    def test_a_first_call_probes_and_stores(self, tmp_path, monkeypatch):
+        calls = _stub_probe(monkeypatch)
+        record = cached_probe(tmp_path, self.SITE)
+        assert calls == [self.SITE]
+        assert record["cached"] is False
+        assert record["accepted"] == "Accept all"
+        assert read_probe(tmp_path)["requests"] == _PROBED
+
+    def test_a_second_call_reuses_the_capture(self, tmp_path, monkeypatch):
+        calls = _stub_probe(monkeypatch)
+        cached_probe(tmp_path, self.SITE)
+        record = cached_probe(tmp_path, self.SITE)
+        assert calls == [self.SITE]
+        assert record["cached"] is True
+        assert record["requests"] == _PROBED
+
+    def test_a_forced_call_probes_again(self, tmp_path, monkeypatch):
+        calls = _stub_probe(monkeypatch)
+        cached_probe(tmp_path, self.SITE)
+        cached_probe(tmp_path, self.SITE, force=True)
+        assert len(calls) == 2
+
+    def test_a_stale_capture_is_replaced(self, tmp_path, monkeypatch):
+        calls = _stub_probe(monkeypatch)
+        cached_probe(tmp_path, self.SITE)
+        stored = json.loads((tmp_path / "traffic.json").read_text())
+        stored["probed_at"] = time.time() - 10_000
+        (tmp_path / "traffic.json").write_text(json.dumps(stored))
+        cached_probe(tmp_path, self.SITE, max_age=3600)
+        assert len(calls) == 2
+
+    def test_an_unavailable_probe_reports_itself(self, tmp_path, monkeypatch):
+        _stub_probe(monkeypatch, requests=[], accepted="")
+        record = cached_probe(tmp_path, self.SITE)
+        assert record["available"] is False
+        assert record["requests"] == []
+        # A failed launch must not be stored as though it were a result.
+        assert read_probe(tmp_path) is None
+
+    def test_a_failed_probe_falls_back_to_what_was_stored(self, tmp_path, monkeypatch):
+        _stub_probe(monkeypatch)
+        cached_probe(tmp_path, self.SITE)
+        _stub_probe(monkeypatch, requests=[], accepted="")
+        record = cached_probe(tmp_path, self.SITE, force=True)
+        assert record["requests"] == _PROBED
+        assert record["cached"] is True
+
+    def test_unreadable_storage_is_not_a_capture(self, tmp_path):
+        (tmp_path / "traffic.json").write_text("{not json")
+        assert read_probe(tmp_path) is None
+
+
+class TestSharedCapture:
+    """The popup and the walk must count the same contacts."""
+
+    SITE = "https://www.smbc-comics.com"
+
+    def test_both_readers_share_one_capture(self, tmp_path, monkeypatch):
+        calls = _stub_probe(monkeypatch)
+        corpus = Corpus(tmp_path)
+        target = expand_mod.target_for_origin(self.SITE)
+        first = expand_mod.probed_requests(corpus, target, self.SITE)
+        second = expand_mod.probed_requests(corpus, target, self.SITE)
+        assert first == second == _PROBED
+        assert len(calls) == 1
+
+    def test_the_capture_sits_beside_the_target_s_documents(self, tmp_path, monkeypatch):
+        _stub_probe(monkeypatch)
+        corpus = Corpus(tmp_path)
+        target = expand_mod.target_for_origin(self.SITE)
+        expand_mod.probed_requests(corpus, target, self.SITE)
+        assert (corpus.root / target.id / "traffic.json").exists()
+
+    def test_a_session_request_joins_a_probed_one(self):
+        merged = merge_requests(
+            [{"url": "https://session.example/a", "type": "script"}], _PROBED,
+        )
+        assert {r["url"] for r in merged} == {
+            "https://session.example/a", "https://doubleclick.net/px"}

@@ -4,17 +4,18 @@ const BRIDGE = "http://127.0.0.1:8765";
 const POLL_MS = 1200;
 
 const NODE_COLOR = {
-  target: "#6ea8fe",
-  entity: "#9ec5ff",
-  generic: "#d8b4fe",
-  domain: "#5b6478",
+  target: "#171a18",
+  entity: "#6f8580",
+  generic: "#a7aca8",
+  domain: "#27786d",
 };
-const UNGROUNDED_COLOR = "#7f8bab";
-const SOURCE_COLOR = {
-  policy: "#6ee7b7",
-  registry: "#f0b35b",
-  traffic: "#f0abfc",
-  resolution: "#5b6478",
+const UNGROUNDED_COLOR = "#a7aca8";
+const KIND_COLOR = {
+  discloses_relation_with: "#526d82",
+  lists_vendor: "#755c7f",
+  authorises_inventory_sale: "#996f28",
+  contacts_domain: "#27786d",
+  resolves_to: "#8c928e",
 };
 const KIND_LABEL = {
   discloses_relation_with: "discloses a relation with",
@@ -37,6 +38,13 @@ const SUBJECT_LABEL = {
   service_data: "data received from its customers",
   not_applicable: "no personal data",
   unknown: "population not stated",
+};
+
+const SITE_KIND_LABEL = {
+  website: "website",
+  data_broker: "vendor-side site",
+  play_store_app: "Play Store app",
+  app_store_app: "App Store app",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -67,9 +75,11 @@ const state = {
   render: null,
   grid: null,
   gridCell: HIT_CELL,
-  track: "personal_data",
+  kind: "main",
+  siteKind: "website",
+  showAllLabels: false,
   filters: {
-    policy: true, registry: true, traffic: true, generic: true, domains: false,
+    generic: true, domains: true,
     ungrounded: true,
   },
   editing: false,
@@ -91,9 +101,7 @@ function indexGraph(graph) {
 }
 
 function edgeEvidence(edge) {
-  const evidence = edge.evidence || [];
-  if (state.track === "both") return evidence;
-  return evidence.filter((ev) => (ev.track || "personal_data") === state.track);
+  return edge.evidence || [];
 }
 
 function edgeSources(edge) {
@@ -109,22 +117,18 @@ function edgeSubjects(edge) {
 }
 
 function edgePasses(edge) {
-  const f = state.filters;
-  const evidence = edgeEvidence(edge);
-  if (!evidence.length) return false;
-  const sources = new Set(evidence.map((ev) => ev.source));
-  if (sources.size === 1 && sources.has("resolution")) return true;
-  for (const s of sources) {
-    if (s === "policy" && f.policy) return true;
-    if (s === "registry" && f.registry) return true;
-    if (s === "traffic" && f.traffic) return true;
+  if (!edgeEvidence(edge).length) return false;
+  if (state.kind === "main") return true;
+  if (state.kind === "contacts_domain") {
+    return edge.kind === "contacts_domain" || edge.kind === "resolves_to";
   }
-  return false;
+  return edge.kind === state.kind;
 }
 
 function nodePasses(node) {
   if (node.type === "generic" && !state.filters.generic) return false;
-  if (node.type === "domain" && !state.filters.domains) return false;
+  if (node.type === "domain" && (!state.filters.domains
+      || !["main", "contacts_domain"].includes(state.kind))) return false;
   if (node.type === "entity" && node.grounded === false
       && !state.filters.ungrounded) return false;
   return true;
@@ -295,9 +299,7 @@ function buildRenderModel() {
     const a = state.layout.get(e.src);
     const b = state.layout.get(e.dst);
     if (!a || !b || !edgePasses(e)) continue;
-    const sources = edgeSources(e);
-    let colour = "#5b6478";
-    for (const s of sources) { colour = SOURCE_COLOR[s] || colour; break; }
+    const colour = KIND_COLOR[e.kind] || "#8c928e";
     edges.push({
       src: e.src, dst: e.dst,
       x1: a.x, y1: a.y, x2: b.x, y2: b.y,
@@ -399,7 +401,7 @@ function highlightSet() {
   return set;
 }
 
-const RING_STROKE = "rgba(255,255,255,.055)";
+const RING_STROKE = "rgba(23,26,24,.1)";
 const CROSS_EDGE_CEILING = 500;
 const MAX_LABELS = 400;
 const LABEL_CELL = 24;
@@ -537,7 +539,7 @@ function drawNodes(model, v) {
         if (n.id === state.selected || match) {
           marked.push([sx(n.x), sy(n.y), r, match]);
         }
-        if (match || n.id === state.selected || n.id === state.hovered
+        if (state.showAllLabels || match || n.id === state.selected || n.id === state.hovered
             || n.hop === 0 || n.wedge * k > 13) {
           labelled.push([n, sx(n.x), sy(n.y), r, !lit]);
         }
@@ -551,7 +553,7 @@ function drawNodes(model, v) {
   ctx.globalAlpha = 1;
 
   if (rings.length) {
-    ctx.strokeStyle = "rgba(240,179,91,.75)";
+    ctx.strokeStyle = "rgba(153,111,40,.75)";
     ctx.lineWidth = 1.2;
     ctx.beginPath();
     for (const [x, y, r] of rings) {
@@ -561,7 +563,7 @@ function drawNodes(model, v) {
     ctx.stroke();
   }
   for (const [x, y, r, match] of marked) {
-    ctx.strokeStyle = match ? "#f0b35b" : "#ffffff";
+    ctx.strokeStyle = match ? "#996f28" : "#171a18";
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.arc(x, y, r + 4, 0, Math.PI * 2);
@@ -572,7 +574,7 @@ function drawNodes(model, v) {
 
 function drawLabels(labelled, rect, k) {
   if (!labelled.length) return;
-  ctx.font = "11px Inter, system-ui, sans-serif";
+  ctx.font = "11px Aptos, Segoe UI, system-ui, sans-serif";
   ctx.textBaseline = "middle";
   labelled.sort((a, b) => b[3] - a[3]);
 
@@ -608,9 +610,9 @@ function drawLabels(labelled, rect, k) {
     for (const key of keys) taken.add(key);
     placed++;
     ctx.globalAlpha = dim ? 0.25 : 1;
-    ctx.fillStyle = "rgba(20,22,28,.8)";
+    ctx.fillStyle = "rgba(251,251,248,.88)";
     ctx.fillRect(box.x, box.y, box.w, box.h);
-    ctx.fillStyle = n.hop === 0 ? "#ffffff" : "#c9cedd";
+    ctx.fillStyle = n.hop === 0 ? "#171a18" : "#343a37";
     ctx.fillText(n.name, x + dx, y + dy);
   }
   ctx.globalAlpha = 1;
@@ -764,9 +766,7 @@ function relationCard(edge, direction) {
   card.append(what);
 
   const parts = [...edgeSources(edge)];
-  for (const t of edgeTracks(edge)) {
-    if (state.track === "both" && TRACK_LABEL[t]) parts.push(TRACK_LABEL[t]);
-  }
+  for (const t of edgeTracks(edge)) if (TRACK_LABEL[t]) parts.push(TRACK_LABEL[t]);
   for (const s of edgeSubjects(edge)) {
     if (SUBJECT_LABEL[s]) parts.push(SUBJECT_LABEL[s]);
   }
@@ -869,8 +869,8 @@ function renderDetail() {
   const out = (state.outgoing.get(node.id) || []).filter(edgePasses);
   const inc = (state.incoming.get(node.id) || []).filter(edgePasses);
   for (const [label, edges, dir] of [
-    ["Hands data to", out, "out"],
-    ["Receives data from", inc, "in"],
+    ["Outgoing propositions", out, "out"],
+    ["Incoming propositions", inc, "in"],
   ]) {
     const h = document.createElement("p");
     h.className = "sub";
@@ -978,19 +978,26 @@ async function sendEdits(edits) {
   renderEditBox();
 }
 
+function shownKinds() {
+  const buttons = [...$("kind-nav").querySelectorAll("button")];
+  return new Set(buttons.filter((b) => !b.hidden).map((b) => b.dataset.kind));
+}
+
 function renderLegend() {
+  const kinds = shownKinds();
   const legend = $("legend");
   legend.innerHTML = "";
   const rows = [
-    ["#6ea8fe", "this site", ""],
-    ["#9ec5ff", "named organisation", ""],
-    [UNGROUNDED_COLOR, "named, but no register knows it", ""],
-    ["#d8b4fe", "unnamed category", ""],
-    [SOURCE_COLOR.policy, "stated in a policy", ""],
-    [SOURCE_COLOR.registry, "named in a registry", ""],
-    [SOURCE_COLOR.traffic, "observed in traffic", ""],
-    ["", "not analysed", "ring"],
-  ];
+    [NODE_COLOR.target, "analysed target", "", null],
+    [NODE_COLOR.entity, "named organisation", "", null],
+    [UNGROUNDED_COLOR, "named, but no register knows it", "", null],
+    [NODE_COLOR.generic, "generic category", "", null],
+    [KIND_COLOR.discloses_relation_with, "disclosed relation", "", "discloses_relation_with"],
+    [KIND_COLOR.lists_vendor, "vendor listing", "", "lists_vendor"],
+    [KIND_COLOR.authorises_inventory_sale, "sale authorisation", "", "authorises_inventory_sale"],
+    [KIND_COLOR.contacts_domain, "observed contact", "", "contacts_domain"],
+    ["", "not analysed", "ring", null],
+  ].filter(([, , , kind]) => kind === null || kinds.has(kind));
   for (const [colour, text, cls] of rows) {
     const row = document.createElement("div");
     row.className = "row";
@@ -1012,13 +1019,14 @@ function renderStats(snapshot) {
     if (!edgePasses(e)) continue;
     if (!state.visible.has(e.src) || !state.visible.has(e.dst)) continue;
     if (["discloses_relation_with", "lists_vendor",
-      "authorises_inventory_sale", "resolves_to"].includes(e.kind)) {
+      "authorises_inventory_sale", "contacts_domain"].includes(e.kind)) {
       recipients.add(e.dst);
     }
   }
   const named = (id) => {
     const n = state.byId.get(id);
-    return n && n.type !== "domain" && n.type !== "target";
+    if (!n || n.type === "target") return false;
+    return state.kind === "contacts_domain" ? n.type === "domain" : n.type !== "domain";
   };
   const arrangements = state.graph.edges.filter(
     (e) => edgePasses(e) && e.kind !== "resolves_to"
@@ -1026,22 +1034,17 @@ function renderStats(snapshot) {
   ).length;
   $("stat-recipients").textContent = [...recipients].filter(named).length;
   $("stat-edges").textContent = arrangements;
-  $("stat-edges-label").textContent = state.track === "both"
-    ? "arrangements (both tracks)"
-    : `${TRACK_LABEL[state.track]} arrangements`;
+  const labels = {
+    main: "typed propositions shown",
+    discloses_relation_with: "disclosed relations",
+    lists_vendor: "vendor listings",
+    authorises_inventory_sale: "sale authorisations",
+    contacts_domain: "observed contacts",
+  };
+  $("stat-edges-label").textContent = labels[state.kind];
+  $("stat-parties-label").textContent = state.kind === "contacts_domain"
+    ? "domains shown" : "organisations shown";
   $("stat-crawled").textContent = (snapshot && snapshot.progress.crawled) || 0;
-
-  const unresolved = (snapshot && snapshot.unresolved) || [];
-  $("unresolved-box").hidden = unresolved.length === 0;
-  $("unresolved-count").textContent = unresolved.length;
-  const wrap = $("unresolved");
-  wrap.innerHTML = "";
-  for (const name of unresolved.slice(0, 60)) {
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = name;
-    wrap.append(tag);
-  }
 }
 
 // -------------------------------------------------------------- collection ---
@@ -1112,6 +1115,7 @@ async function start() {
       body: JSON.stringify({
         url: state.origin, hops: state.hops,
         time_limit: state.timeLimit * 60, requests, cmp,
+        evidence_kind: state.kind,
       }),
     });
     data = await resp.json();
@@ -1210,7 +1214,6 @@ $("search").addEventListener("keydown", (ev) => {
 });
 
 for (const [id, key] of [
-  ["f-policy", "policy"], ["f-registry", "registry"], ["f-traffic", "traffic"],
   ["f-generic", "generic"], ["f-domains", "domains"],
   ["f-ungrounded", "ungrounded"],
 ]) {
@@ -1229,13 +1232,18 @@ $("time-limit").addEventListener("change", () => {
   state.timeLimit = Math.max(0, Math.round(Number($("time-limit").value) || 0));
   $("time-limit").value = state.timeLimit;
 });
-$("track").addEventListener("click", (ev) => {
+$("kind-nav").addEventListener("click", (ev) => {
   const button = ev.target.closest("button");
-  if (!button) return;
-  state.track = button.dataset.track;
-  for (const b of $("track").querySelectorAll("button")) b.classList.toggle("on", b === button);
+  if (!button || button.hidden) return;
+  selectKind(button.dataset.kind);
   rebuild(false);
   renderStats(lastSnapshot);
+  renderLegend();
+});
+$("fit-view").addEventListener("click", fit);
+$("show-labels").addEventListener("change", (ev) => {
+  state.showAllLabels = ev.target.checked;
+  draw();
 });
 $("edit-toggle").addEventListener("click", () => {
   state.editing = !state.editing;
@@ -1248,6 +1256,47 @@ window.addEventListener("keydown", (ev) => {
     renderEditBox();
   }
 });
+function selectKind(kind) {
+  state.kind = kind;
+  let label = "";
+  for (const b of $("kind-nav").querySelectorAll("button")) {
+    const on = b.dataset.kind === kind;
+    b.classList.toggle("on", on);
+    if (on) label = b.textContent.trim().toLowerCase();
+  }
+  $("run").textContent = kind === "main"
+    ? "Collect all evidence" : `Collect ${label}`;
+}
+
+// The bridge decides which propositions are evidence about this kind of site:
+// a store listing's traffic is the store's, and a vendor registry read off a
+// publisher names the registry rather than the publisher.
+function applyProfile(profile) {
+  state.siteKind = profile.site_kind || "website";
+  const views = profile.graph_views || [];
+  if (!views.length) return;
+  for (const button of $("kind-nav").querySelectorAll("button")) {
+    button.hidden = !views.includes(button.dataset.kind);
+  }
+  selectKind(views.includes(state.kind) ? state.kind
+    : (profile.default_view && views.includes(profile.default_view)
+      ? profile.default_view : views[0]));
+  $("site-kind").textContent = SITE_KIND_LABEL[state.siteKind] || state.siteKind;
+  $("site-kind").hidden = false;
+  renderLegend();
+}
+
+async function loadProfile() {
+  try {
+    const resp = await fetch(
+      `${BRIDGE}/site?url=${encodeURIComponent(state.origin)}`);
+    if (!resp.ok) return;
+    applyProfile(await resp.json());
+  } catch (e) {
+    // The bridge being down is reported when a walk is attempted.
+  }
+}
+
 $("run").addEventListener("click", start);
 $("stop").addEventListener("click", stop);
 
@@ -1257,6 +1306,11 @@ $("stop").addEventListener("click", stop);
   state.origin = params.get("url") || "";
   const tab = params.get("tab");
   state.tabId = tab === null ? null : Number(tab);
+  state.kind = params.get("kind") || "main";
+  if (!Object.keys(KIND_COLOR).includes(state.kind) && state.kind !== "main") {
+    state.kind = "main";
+  }
+  selectKind(state.kind);
   $("origin").textContent = state.origin || "no URL supplied";
   $("origin").title = state.origin;
   $("run").disabled = !state.origin;
@@ -1264,4 +1318,5 @@ $("stop").addEventListener("click", stop);
   renderDetail();
   renderEditBox();
   resize();
+  if (state.origin) loadProfile();
 })();

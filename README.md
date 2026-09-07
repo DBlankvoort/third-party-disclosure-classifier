@@ -88,9 +88,11 @@ Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
 | `tpd/tracks.py` | Track and data-subject vocabulary carried by every relation |
 | `tpd/entities.py` | Organisation-name canonicalisation, domain ↔ entity resolution |
 | `tpd/kb/` | Tracker Radar, the TCF Global Vendor List, holding companies, headquarters countries |
+| `tpd/site_kind.py` | What kind of site a URL names |
+| `tpd/probe.py` | Clean-profile traffic capture |
 | `tpd/traffic.py` | Third parties named by observed network requests |
 | `tpd/cmp.py` | Third parties named by a captured consent dialog |
-| `tpd/sharing_graph.py` | Cross-target graph of data-sharing arrangements |
+| `tpd/sharing_graph.py` | Cross-target graph of evidence-bearing propositions |
 | `tpd/expand.py` | Outward multi-hop collection from one seed origin |
 | `tpd/refresh.py` | Snapshot and change tracking across collections |
 | `tpd/collect/` | Crawler |

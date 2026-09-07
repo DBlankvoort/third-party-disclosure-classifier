@@ -40,8 +40,41 @@ def observed_hosts(
     include_infrastructure: bool = False,
 ) -> list[dict]:
     """Group observed requests by the third-party organisation contacted."""
-    origin_reg = registrable_domain(urlparse(origin).hostname or "")
+    contacts = observed_contacts(
+        requests, origin, first_party=first_party,
+        include_infrastructure=include_infrastructure,
+    )
     by_entity: dict[str, dict] = {}
+    for contact in contacts:
+        if not contact["entity"]:
+            continue
+        key = canonical_key(contact["entity"])
+        rec = by_entity.setdefault(key, {
+            "entity": contact["entity"], "basis": contact["basis"],
+            "domains": set(), "types": set(), "consent": set(), "requests": 0,
+        })
+        rec["domains"].add(contact["domain"])
+        rec["types"].update(contact["types"])
+        rec["consent"].update(contact["consent_states"])
+        rec["requests"] += contact["requests"]
+    out = [{
+        "entity": rec["entity"], "basis": rec["basis"],
+        "domains": sorted(rec["domains"]), "types": sorted(rec["types"]),
+        "consent": consent_state(rec["consent"]), "requests": rec["requests"],
+    } for rec in by_entity.values()]
+    out.sort(key=lambda r: (-r["requests"], r["entity"].lower()))
+    return out
+
+
+def observed_contacts(
+    requests,
+    origin: str,
+    first_party: set[str] | None = None,
+    include_infrastructure: bool = False,
+) -> list[dict]:
+    """Group observed requests by contacted registrable domain."""
+    origin_reg = registrable_domain(urlparse(origin).hostname or "")
+    by_domain: dict[str, dict] = {}
     for req in requests or ():
         url = (req or {}).get("url") or ""
         host = urlparse(url).hostname or ""
@@ -51,35 +84,21 @@ def observed_hosts(
         if not include_infrastructure and reg in INFRASTRUCTURE_DOMAINS:
             continue
         name, basis = entity_for_domain(reg)
-        if not name:
-            continue
-        key = canonical_key(name)
-        rec = by_entity.setdefault(key, {
-            "entity": name,
+        attributed = basis in {"domain_map", "tracker_radar"}
+        rec = by_domain.setdefault(reg, {
+            "domain": reg,
+            "entity": name if attributed else "",
             "basis": basis,
-            "domains": set(),
             "types": set(),
-            "consent": set(),
+            "consent_states": set(),
             "requests": 0,
         })
-        # A curated attribution outranks one guessed from the domain label.
-        if basis == "domain_map":
-            rec["basis"] = basis
-            rec["entity"] = name
-        rec["domains"].add(reg)
         rec["types"].add((req or {}).get("type") or "other")
-        rec["consent"].add((req or {}).get("consent") or "")
+        rec["consent_states"].add((req or {}).get("consent") or "")
         rec["requests"] += 1
-
-    out = []
-    for rec in by_entity.values():
-        out.append({
-            "entity": rec["entity"],
-            "basis": rec["basis"],
-            "domains": sorted(rec["domains"]),
-            "types": sorted(rec["types"]),
-            "consent": consent_state(rec["consent"]),
-            "requests": rec["requests"],
-        })
-    out.sort(key=lambda r: (-r["requests"], r["entity"].lower()))
+    out = [{**rec, "types": sorted(rec["types"]),
+            "consent_states": sorted(rec["consent_states"]),
+            "consent": consent_state(rec["consent_states"])}
+           for rec in by_domain.values()]
+    out.sort(key=lambda r: (-r["requests"], r["domain"]))
     return out

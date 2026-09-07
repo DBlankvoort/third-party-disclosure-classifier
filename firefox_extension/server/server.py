@@ -24,6 +24,7 @@ CONFIG = {
     "use_ner": True,
     "use_poligraph": True,
     "delay": 0.2,
+    "probe": True,
     "allowed_origin": "",
     "entity_domains": "",
 }
@@ -51,13 +52,15 @@ def _entity_overrides() -> dict:
 
 
 def start_expansion(url: str, hops: int, requests: list, force: bool,
-                    cmp: dict | None = None, time_limit: float = 0.0) -> str:
+                    cmp: dict | None = None, time_limit: float = 0.0,
+                    evidence_kind: str = "main") -> str:
     from tpd.expand import Expansion
 
     expansion = Expansion(
         CONFIG["corpus_root"], url, hops=hops, requests=requests, force=force,
         delay=CONFIG["delay"], overrides=_entity_overrides(), cmp=cmp,
-        time_limit=time_limit,
+        time_limit=time_limit, evidence_kind=evidence_kind,
+        probe=None if CONFIG["probe"] else False,
     )
     job_id = uuid.uuid4().hex[:12]
 
@@ -128,6 +131,17 @@ def _log_edits(expansion, edits: list) -> None:
         sys.stderr.write(f"  edit log not written: {exc}\n")
 
 
+def site_profile(url: str) -> dict:
+    """How the extension should present one URL, before anything is collected."""
+    from tpd.expand import origin_of, target_for_url
+    from tpd.site_kind import profile
+
+    origin = origin_of(url)
+    target = target_for_url(url)
+    return {"origin": origin, "target_id": target.id, "target_type": target.type,
+            **profile(origin, target)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "tpd-extension-bridge/0.1"
 
@@ -163,7 +177,8 @@ class Handler(BaseHTTPRequestHandler):
     # hundreds of URLs, well past what a query string will carry.
     _MAX_BODY = 4 * 1024 * 1024
 
-    _PATHS = ["/health", "/analyze", "/graph", "/graph/stop", "/graph/edit"]
+    _PATHS = ["/health", "/site", "/analyze", "/graph", "/graph/stop",
+              "/graph/edit"]
 
     def _body(self) -> dict | None:
         try:
@@ -219,12 +234,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 job_id = start_expansion(url, hops, payload.get("requests") or [],
                                          force, payload.get("cmp"),
-                                         time_limit=time_limit)
+                                         time_limit=time_limit,
+                                         evidence_kind=payload.get("evidence_kind") or "main")
             except ValueError as exc:
                 self._json(400, {"error": str(exc)})
                 return
             self._json(202, {"job_id": job_id, "hops": hops,
-                             "time_limit": time_limit})
+                             "time_limit": time_limit,
+                             "evidence_kind": payload.get("evidence_kind") or "main"})
             return
 
         self._run(url, force, payload.get("requests") or [], payload.get("cmp"))
@@ -241,6 +258,7 @@ class Handler(BaseHTTPRequestHandler):
                 delay=CONFIG["delay"],
                 requests=requests,
                 cmp=cmp,
+                probe=CONFIG["probe"],
             )
             self._json(200, result)
         except ValueError as exc:
@@ -254,7 +272,18 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             self._json(200, {"ok": True, "ner": CONFIG["use_ner"],
                              "poligraph": CONFIG["use_poligraph"],
+                             "probe": CONFIG["probe"],
                              "corpus": CONFIG["corpus_root"]})
+            return
+        if parsed.path == "/site":
+            url = (parse_qs(parsed.query).get("url") or [""])[0]
+            if not url:
+                self._json(400, {"error": "missing ?url="})
+                return
+            try:
+                self._json(200, site_profile(url))
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
             return
         if parsed.path == "/graph":
             job_id = (parse_qs(parsed.query).get("job") or [""])[0]
@@ -290,6 +319,10 @@ def main() -> None:
                     help="gazetteer-only (faster; lower named-org recall)")
     ap.add_argument("--no-poligraph", action="store_true",
                     help="skip PoliGraph sharing-relationship extraction")
+    ap.add_argument("--no-probe", action="store_true",
+                    help="report only the browser's own requests; skip the "
+                         "clean-profile load that both the popup and the graph "
+                         "otherwise share")
     ap.add_argument("--delay", type=float, default=CONFIG["delay"],
                     help="polite per-request delay (s)")
     ap.add_argument("--entity-domains", default="",
@@ -301,12 +334,14 @@ def main() -> None:
     CONFIG["use_ner"] = not args.no_ner
     CONFIG["use_poligraph"] = not args.no_poligraph
     CONFIG["delay"] = args.delay
+    CONFIG["probe"] = not args.no_probe
     CONFIG["entity_domains"] = args.entity_domains
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"tpd extension bridge on http://{args.host}:{args.port}  "
           f"(ner={CONFIG['use_ner']}, poligraph={CONFIG['use_poligraph']}, "
-          f"corpus={CONFIG['corpus_root']})")
+          f"probe={CONFIG['probe']}, corpus={CONFIG['corpus_root']})")
+    print("  GET  /site?url=https://example.com   ->  kind + applicable views")
     print("  GET  /analyze?url=https://example.com")
     print("  POST /graph {url, hops}  ->  GET /graph?job=<id>   ·   Ctrl-C to stop")
     print("  POST /graph/edit {job_id, edits}  ->  corrections applied to a walk")

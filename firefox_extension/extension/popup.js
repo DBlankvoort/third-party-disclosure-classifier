@@ -1,70 +1,25 @@
 "use strict";
 
 const BRIDGE = "http://127.0.0.1:8765";
-
-const MEDIA = ["prose", "structured", "machine_readable", "other_doc"];
-const SPECIFICITIES = ["named", "category", "generic"];
-const MEDIA_LABEL = {
-  prose: "prose",
-  structured: "structured",
-  machine_readable: "machine-readable",
-  other_doc: "other doc",
-};
-
-const ACTION_LABEL = {
-  collect: "collected",
-  be_shared: "shared",
-  be_sold: "sold",
-  use: "used",
-  store: "stored",
-};
-const ACTION_COLOR = {
-  collect: "#6ee7b7",
-  be_shared: "#9ec5ff",
-  be_sold: "#f0b35b",
-  use: "#d8b4fe",
-  store: "#f0abfc",
-};
-const NEG_COLOR = "#f87171";
-
-const SOURCE_LABEL = {
-  ads_txt: "Authorized ad sellers",
-  sellers_json: "Ad-exchange sellers",
-  tcf_gvl: "IAB-TCF consent vendors",
-  vendors_json: "Declared vendors",
-  cookie_table: "Cookie / tracking providers",
-  vendor_table: "Vendor & sub-processor tables",
-};
-const SOURCE_SHORT = {
-  ads_txt: "ad sellers",
-  sellers_json: "exchange sellers",
-  tcf_gvl: "TCF vendors",
-  vendors_json: "vendors",
-  cookie_table: "cookie providers",
-  vendor_table: "sub-processors",
-};
-
-const ROLE_LABEL = {
-  privacy_policy: "Privacy policy",
-  cookie_policy: "Cookie policy",
-  subprocessor_list: "Sub-processor list",
-  vendor_list: "Vendor list",
-  do_not_sell: "Do-not-sell / privacy choices",
-  dpa: "Data processing agreement",
-  partners_page: "Partners page",
-  help_doc: "Help / FAQ",
-  ads_txt: "ads.txt",
-  app_ads_txt: "app-ads.txt",
-  sellers_json: "sellers.json",
-  vendors_json: "vendors.json",
-  tcf_gvl: "IAB-TCF vendor list",
-};
-
 const $ = (id) => document.getElementById(id);
+let pageUrl = "";
+let pageTab = null;
 
-function prettyRole(role) {
-  return ROLE_LABEL[role] || role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
+const VIEW_KIND = {
+  prose: "discloses_relation_with",
+  vendors: "lists_vendor",
+  adtech: "authorises_inventory_sale",
+  traffic: "contacts_domain",
+};
+// How each kind of site is named.
+const SITE_KIND = {
+  website: {label: "website"},
+  data_broker: {label: "vendor-side site"},
+  play_store_app: {label: "Play Store app", app: true},
+  app_store_app: {label: "App Store app", app: true},
+};
+const PROSE_SOURCES = new Set(["policy", "cookie_table", "vendor_table"]);
+const VENDOR_SOURCES = new Set(["cmp", "tcf_gvl", "vendors_json", "sellers_json"]);
 
 function showStatus(text) {
   $("status").hidden = false;
@@ -81,43 +36,32 @@ function showOffline() {
 }
 
 async function activeTab() {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await browser.tabs.query({active: true, currentWindow: true});
   return tab || null;
 }
 
-async function activeTabUrl() {
-  const tab = await activeTab();
-  return tab ? tab.url : null;
-}
-
 async function observedRequests() {
-  const tab = await activeTab();
-  if (!tab) return [];
+  if (!pageTab) return [];
   try {
-    const res = await browser.runtime.sendMessage({
-      kind: "getRequests", tabId: tab.id,
-    });
-    return (res && res.requests) || [];
-  } catch (e) {
+    const result = await browser.runtime.sendMessage({kind: "getRequests", tabId: pageTab.id});
+    return (result && result.requests) || [];
+  } catch (error) {
     return [];
   }
 }
 
 async function capturedCmp() {
-  const tab = await activeTab();
-  if (!tab) return null;
+  if (!pageTab) return null;
   try {
-    await browser.tabs.executeScript(tab.id, { file: "cmp.js" });
-  } catch (e) {
-    // Privileged pages and pages loaded before the extension refuse injection.
+    await browser.tabs.executeScript(pageTab.id, {file: "cmp.js"});
+  } catch (error) {
+    return null;
   }
-  // cmp.js answers the dialog asynchronously, and executeScript resolves
-  // before it has finished.
-  for (let i = 0; i < 12; i++) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     try {
-      const res = await browser.runtime.sendMessage({ kind: "getCmp", tabId: tab.id });
-      if (res && res.cmp) return res.cmp;
-    } catch (e) {
+      const result = await browser.runtime.sendMessage({kind: "getCmp", tabId: pageTab.id});
+      if (result && result.cmp) return result.cmp;
+    } catch (error) {
       return null;
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -125,582 +69,151 @@ async function capturedCmp() {
   return null;
 }
 
-async function analyze(url, force) {
-  showStatus(force ? "Re-crawling…" : "Analyzing…");
-  const requests = await observedRequests();
-  const cmp = await capturedCmp();
-  let data;
-  try {
-    const resp = await fetch(`${BRIDGE}/analyze`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, force: !!force, requests, cmp }),
-    });
-    data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-  } catch (err) {
-    // A failed fetch to loopback almost always means the bridge isn't running.
-    if (err instanceof TypeError) return showOffline();
-    showStatus(`Error: ${err.message}`);
-    return;
-  }
-  render(data);
+function sourcesOf(relation) {
+  return new Set(relation.sources || []);
 }
 
-function render(d) {
+function hasSource(relation, allowed) {
+  return [...sourcesOf(relation)].some((source) => allowed.has(source));
+}
+
+function relationCount(relations, predicate) {
+  return new Set(relations.filter(predicate).map((relation) => relation.entity)).size;
+}
+
+function roles(docs, accepted) {
+  const labels = {
+    privacy_policy: "privacy policy", cookie_policy: "cookie policy",
+    dpa: "data processing agreement", subprocessor_list: "subprocessor list",
+    vendor_list: "vendor list", tcf_gvl: "TCF vendor list",
+    vendors_json: "vendor record", sellers_json: "sellers.json",
+    ads_txt: "ads.txt", app_ads_txt: "app-ads.txt",
+  };
+  return [...new Set((docs || []).filter((doc) => doc.ok !== false && accepted.has(doc.role))
+    .map((doc) => labels[doc.role] || doc.role.replaceAll("_", " ")))];
+}
+
+function siteKind(data) {
+  return SITE_KIND[data.site_kind] || SITE_KIND.website;
+}
+
+// The store's own traffic and advertising registry belong to Google or Apple,
+// and a vendor registry read off a publisher names the registry rather than the
+// publisher, so each site kind carries only the views that speak about it.
+function applyViews(data) {
+  const views = new Set(data.views || Object.values(VIEW_KIND));
+  for (const el of document.querySelectorAll("[data-view]")) {
+    const kind = VIEW_KIND[el.dataset.view];
+    el.hidden = Boolean(kind) && !views.has(kind);
+  }
+}
+
+function openWorkspace(view) {
+  const kind = VIEW_KIND[view] || "main";
+  const page = view === "main" ? "graph.html" : "evidence.html";
+  browser.tabs.create({
+    url: browser.runtime.getURL(page)
+      + `?url=${encodeURIComponent(pageUrl)}&tab=${pageTab ? pageTab.id : ""}`
+      + `&kind=${encodeURIComponent(kind)}`,
+  });
+}
+
+function renderRights(rights, origin) {
+  const emails = rights.emails || [];
+  const links = rights.links || {};
+  const email = emails[0] || "";
+  const subject = `Data rights request concerning ${origin}`;
+  const href = email
+    ? `mailto:${email}?subject=${encodeURIComponent(subject)}`
+    : (links.do_not_sell || links.privacy_policy || "#");
+  $("rights-action").href = href;
+  if (!href.startsWith("mailto:") && href !== "#") {
+    $("rights-action").target = "_blank";
+    $("rights-action").rel = "noreferrer";
+  }
+  $("rights-detail").textContent = "Manage data access, correction, and deletion requests";
+  $("contact").hidden = !email;
+  if (email) {
+    $("privacy-email").textContent = email;
+    $("privacy-email").href = href;
+  }
+}
+
+function render(data) {
   $("status").hidden = true;
   $("offline").hidden = true;
   $("result").hidden = false;
   $("rescan").hidden = false;
-
-  $("origin").textContent = d.origin;
-  $("origin").title = d.origin;
-
-  $("source-pill").textContent =
-    (d.cached ? "cached" : "live crawl") + ` · ${d.fetched_docs} doc(s) fetched`;
-
-  const relations = d.sharing_relations || [];
-  renderDocs(d.documents);
-  renderMatrix(new Set(d.facets));
-  renderRelations(relations, d.poligraph !== false);
-  renderGraph(relations, d.origin);
-  renderRights(d.rights || { links: {}, emails: [] }, d.origin);
-  renderObserved(d.observed_parties || [], d.undisclosed_parties || []);
-  renderCmp(d.cmp_parties || []);
-}
-
-function renderCmp(parties) {
-  const box = $("cmp-box");
-  box.hidden = parties.length === 0;
-  $("cmp-count").textContent =
-    `${parties.length} entit${parties.length === 1 ? "y" : "ies"}`;
-
-  const note = $("cmp-note");
-  const readOff = parties.filter((p) => p.source !== "tcf").length;
-  note.hidden = parties.length === 0;
-  if (parties.length) {
-    note.textContent = readOff
-      ? "Read from the dialog's markup; names may be truncated or mis-split."
-      : "Reported by the consent platform through the IAB TCF interface.";
-  }
-
-  const wrap = $("cmp");
-  wrap.innerHTML = "";
-  for (const p of parties) {
-    const tag = document.createElement("span");
-    tag.className = "tag";
-    tag.textContent = p.entity;
-    tag.title = [p.surface, p.purposes.join(", ")].filter(Boolean).join(" · ");
-    wrap.append(tag);
-  }
-}
-
-function renderObserved(observed, undisclosed) {
-  const box = $("observed-box");
-  box.hidden = observed.length === 0;
-  $("observed-count").textContent =
-    `${observed.length} entit${observed.length === 1 ? "y" : "ies"} · ` +
-    "reached while the page loaded";
-  const undisclosedKeys = new Set(undisclosed.map((o) => o.entity));
-
-  const note = $("undisclosed-note");
-  note.hidden = undisclosed.length === 0;
-  if (undisclosed.length) {
-    note.textContent =
-      `${undisclosed.length} of these ${undisclosed.length === 1 ? "is" : "are"} ` +
-      "not named in any document fetched for this site.";
-  }
-
-  const wrap = $("observed");
-  wrap.innerHTML = "";
-  for (const o of observed) {
-    const tag = document.createElement("span");
-    // An observed party absent from the documents is the finding worth
-    // marking.
-    const isNew = undisclosedKeys.has(o.entity);
-    tag.className = "tag" + (isNew ? " neg" : "");
-    tag.textContent = o.entity + (isNew ? " · undisclosed" : "");
-    tag.title = `${o.requests} request(s) · ${o.domains.join(", ")}`;
-    wrap.append(tag);
-  }
-}
-
-function renderDocs(docs) {
-  const ul = $("docs");
-  ul.innerHTML = "";
-  const disclosing = docs.filter((x) => x.medium && x.relevant);
-  $("docs-empty").hidden = disclosing.length > 0;
-
-  for (const doc of disclosing) {
-    const li = document.createElement("li");
-    li.className = "doc";
-
-    const main = document.createElement("div");
-    main.className = "doc-main";
-    const role = document.createElement("div");
-    role.className = "role";
-    role.textContent = prettyRole(doc.role);
-    const a = document.createElement("a");
-    a.className = "durl";
-    a.href = doc.url;
-    a.target = "_blank";
-    a.rel = "noreferrer";
-    a.textContent = doc.url;
-    a.title = doc.url;
-    main.append(role, a);
-
-    const tag = document.createElement("span");
-    tag.className = `medium-tag ${doc.medium}`;
-    tag.textContent = MEDIA_LABEL[doc.medium] || doc.medium;
-
-    li.append(main, tag);
-    ul.append(li);
-  }
-}
-
-function renderMatrix(facets) {
-  const tbody = $("matrix").querySelector("tbody");
-  tbody.innerHTML = "";
-  for (const m of MEDIA) {
-    const tr = document.createElement("tr");
-    const th = document.createElement("th");
-    th.textContent = MEDIA_LABEL[m];
-    tr.append(th);
-    for (const s of SPECIFICITIES) {
-      const td = document.createElement("td");
-      const hit = facets.has(`${m}:${s}`);
-      td.className = "cell " + (hit ? "hit" : "miss");
-      td.textContent = hit ? "●" : "·";
-      td.title = `${m}:${s}` + (hit ? " — present" : " — not found");
-      tr.append(td);
-    }
-    tbody.append(tr);
-  }
-}
-
-function isProse(r) {
-  return (r.sources || []).includes("policy");
-}
-function primarySource(r) {
-  return (r.sources || []).find((s) => s !== "policy") || "policy";
-}
-
-function renderRelations(relations, enabled) {
-  const ul = $("relations");
-  ul.innerHTML = "";
-  const third = relations.filter((r) => r.party === "third");
-  const first = relations.filter((r) => r.party === "first");
-  const prose = third.filter(isProse);
-  const synth = third.filter((r) => !isProse(r));
-
-  $("relations-off").hidden = enabled;
-  $("relations-empty").hidden = third.length > 0;
-
-  const groups = new Map();
-  for (const r of prose) {
-    if (!groups.has(r.entity)) {
-      groups.set(r.entity, { examples: new Set(), items: [] });
-    }
-    const g = groups.get(r.entity);
-    for (const ex of r.examples || []) g.examples.add(ex);
-    g.items.push(r);
-  }
-  for (const [entity, g] of groups) {
-    const li = document.createElement("li");
-    li.className = "rel-card";
-
-    const head = document.createElement("div");
-    head.className = "rel-entity";
-    const name = document.createElement("span");
-    name.className = "rel-name";
-    name.textContent = entity;
-    head.append(name);
-    if (g.examples.size) {
-      const ex = document.createElement("span");
-      ex.className = "rel-examples";
-      ex.textContent = "e.g. " + [...g.examples].join(", ");
-      head.append(ex);
-    }
-    li.append(head);
-
-    for (const r of g.items) {
-      const row = document.createElement("div");
-      row.className = "rel-item" + (r.negative ? " neg" : "");
-      row.title = r.text || "";
-
-      const act = document.createElement("span");
-      act.className = `act ${r.action}` + (r.negative ? " neg" : "");
-      act.textContent = (r.negative ? "not " : "") + (ACTION_LABEL[r.action] || r.action);
-
-      const data = document.createElement("span");
-      data.className = "rel-data";
-      data.textContent = r.data_type;
-
-      row.append(act, data);
-      if (r.purposes && r.purposes.length) {
-        const p = document.createElement("span");
-        p.className = "rel-purposes";
-        p.textContent = "for " + r.purposes.join(", ");
-        row.append(p);
-      }
-      li.append(row);
-    }
-    ul.append(li);
-  }
-
-  const bySource = new Map();
-  for (const r of synth) {
-    const s = primarySource(r);
-    if (!bySource.has(s)) bySource.set(s, []);
-    bySource.get(s).push(r);
-  }
-  for (const [source, items] of bySource) {
-    const li = document.createElement("li");
-    li.className = "rel-card";
-
-    const head = document.createElement("div");
-    head.className = "rel-entity";
-    const name = document.createElement("span");
-    name.className = "rel-name plain";
-    name.textContent = SOURCE_LABEL[source] || source;
-    const n = document.createElement("span");
-    n.className = "rel-examples";
-    const upstream = items[0].direction === "upstream";
-    n.textContent = `${items.length} entit${items.length === 1 ? "y" : "ies"} · ` +
-      (upstream
-        ? `supply ${items[0].data_type} to this site`
-        : `${items[0].data_type} ${ACTION_LABEL[items[0].action] || items[0].action}`);
-    head.append(name, n);
-    li.append(head);
-
-    const wrap = document.createElement("div");
-    wrap.className = "taglist tight";
-    for (const r of items) {
-      const tag = document.createElement("span");
-      tag.className = "tag" + (r.qualifier === "reseller" || r.qualifier === "intermediary"
-        ? " dim" : "");
-      tag.textContent = r.entity + (r.qualifier ? ` · ${r.qualifier}` : "");
-      tag.title = [r.text, r.purposes && r.purposes.length ? "for " + r.purposes.join(", ") : ""]
-        .filter(Boolean).join(" — ");
-      wrap.append(tag);
-    }
-    li.append(wrap);
-    ul.append(li);
-  }
-
-  const box = $("firstparty-box");
-  box.hidden = first.length === 0;
-  $("firstparty-count").textContent =
-    `${first.length} arrangement${first.length === 1 ? "" : "s"}`;
-  const wrap = $("firstparty");
-  wrap.innerHTML = "";
-  for (const r of first) {
-    const tag = document.createElement("span");
-    tag.className = "tag" + (r.negative ? " neg" : "");
-    tag.title = r.text || "";
-    tag.textContent =
-      `${r.data_type} · ${(r.negative ? "not " : "") + (ACTION_LABEL[r.action] || r.action)}`;
-    wrap.append(tag);
-  }
-}
-
-const GRAPH_MAX_DATA = 8;
-const GRAPH_MAX_ENTS = 8;
-
-function graphModel(relations, originHost) {
-  const third = relations.filter((r) => r.party === "third");
-  const prose = third.filter(isProse);
-  const synth = third.filter((r) => !isProse(r));
-
-  const entities = []; // {id, label, dim}
-  const edges = [];    // {ent, data, action, negative, title}
-  const entIdx = new Map();
-
-  const proseEnts = [...new Set(prose.map((r) => r.entity))];
-  for (const e of proseEnts.slice(0, GRAPH_MAX_ENTS)) {
-    entIdx.set(e, entities.length);
-    entities.push({ id: e, label: e });
-  }
-  const overflow = proseEnts.length - GRAPH_MAX_ENTS;
-  if (overflow > 0) {
-    entIdx.set("__more__", entities.length);
-    entities.push({ id: "__more__", label: `+${overflow} more`, dim: true });
-  }
-  for (const r of prose) {
-    const idx = entIdx.has(r.entity) ? entIdx.get(r.entity) : entIdx.get("__more__");
-    edges.push({
-      ent: idx, data: r.data_type, action: r.action, negative: r.negative,
-      title: `${r.entity} ← ${r.data_type} (${ACTION_LABEL[r.action] || r.action}` +
-        `${r.negative ? ", stated NOT" : ""})`,
-    });
-  }
-  const bySource = new Map();
-  for (const r of synth) {
-    const s = primarySource(r);
-    if (!bySource.has(s)) bySource.set(s, []);
-    bySource.get(s).push(r);
-  }
-  for (const [source, items] of bySource) {
-    const idx = entities.length;
-    entities.push({
-      id: source,
-      label: `${items.length} ${SOURCE_SHORT[source] || source}`,
-      dim: true,
-    });
-    const combos = new Map();
-    for (const r of items) combos.set(`${r.data_type}|${r.action}`, r);
-    for (const r of combos.values()) {
-      const arrow = r.direction === "upstream" ? "→" : "←";
-      edges.push({
-        ent: idx, data: r.data_type, action: r.action, negative: false,
-        title: `${items.length} × ${SOURCE_SHORT[source] || source} ${arrow} ${r.data_type}`,
-      });
-    }
-  }
-
-  const dataCount = new Map();
-  for (const e of edges) dataCount.set(e.data, (dataCount.get(e.data) || 0) + 1);
-  const dataNames = [...dataCount.keys()].sort((a, b) => dataCount.get(b) - dataCount.get(a));
-  const dataIdx = new Map();
-  const data = [];
-  for (const nm of dataNames.slice(0, GRAPH_MAX_DATA)) {
-    dataIdx.set(nm, data.length);
-    data.push({ label: nm });
-  }
-  if (dataNames.length > GRAPH_MAX_DATA) {
-    const rest = dataNames.length - GRAPH_MAX_DATA;
-    dataIdx.set("__more__", data.length);
-    data.push({ label: `+${rest} more`, dim: true });
-  }
-  const drawn = new Set();
-  const finalEdges = [];
-  for (const e of edges) {
-    const di = dataIdx.has(e.data) ? dataIdx.get(e.data) : dataIdx.get("__more__");
-    const key = `${di}|${e.ent}|${e.action}|${e.negative}`;
-    if (drawn.has(key)) continue;
-    drawn.add(key);
-    finalEdges.push({ ...e, data: di });
-  }
-  return { site: originHost, data, entities, edges: finalEdges };
-}
-
-function truncate(s, n) {
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-
-function svgEl(name, attrs) {
-  const el = document.createElementNS("http://www.w3.org/2000/svg", name);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  return el;
-}
-
-function renderGraph(relations, origin) {
-  const svg = $("graph");
-  svg.innerHTML = "";
-  const model = graphModel(relations, origin.replace(/^https?:\/\//, ""));
-  const empty = model.edges.length === 0;
-  $("graph-empty").hidden = !empty;
-  $("graph-wrap").hidden = empty;
-  $("graph-legend").innerHTML = "";
-  if (empty) return;
-
-  const W = 340;
-  const ROW = 24;
-  const rows = Math.max(model.data.length, model.entities.length, 1);
-  const H = rows * ROW + 30;
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.setAttribute("width", "100%");
-
-  const xSite = 12, xData = 152, xEnt = W - 12;
-  const yFor = (i, n) => (H - n * ROW) / 2 + i * ROW + ROW / 2;
-  const ySite = H / 2;
-
-  const seenData = new Set(model.edges.map((e) => e.data));
-  for (const di of seenData) {
-    const y = yFor(di, model.data.length);
-    svg.append(svgEl("path", {
-      d: `M ${xSite + 5} ${ySite} C ${xSite + 60} ${ySite}, ${xData - 70} ${y}, ${xData - 42} ${y}`,
-      stroke: "#3a4154", "stroke-width": 1.2, fill: "none",
-    }));
-  }
-  for (const e of model.edges) {
-    const y1 = yFor(e.data, model.data.length);
-    const y2 = yFor(e.ent, model.entities.length);
-    const color = e.negative ? NEG_COLOR : (ACTION_COLOR[e.action] || "#5b6478");
-    const path = svgEl("path", {
-      d: `M ${xData + 42} ${y1} C ${xData + 90} ${y1}, ${xEnt - 90} ${y2}, ${xEnt - 8} ${y2}`,
-      stroke: color, "stroke-width": 1.4, fill: "none", opacity: 0.85,
-    });
-    if (e.negative) path.setAttribute("stroke-dasharray", "4 3");
-    const t = svgEl("title", {});
-    t.textContent = e.title;
-    path.append(t);
-    svg.append(path);
-  }
-
-  // Site node.
-  svg.append(svgEl("circle", { cx: xSite, cy: ySite, r: 5, fill: "#6ea8fe" }));
-  const siteLabel = svgEl("text", {
-    x: xSite - 4, y: ySite - 10, fill: "#e8eaf0", "font-size": 10, "font-weight": 600,
-  });
-  siteLabel.textContent = truncate(model.site, 24);
-  svg.append(siteLabel);
-
-  // Data nodes.
-  model.data.forEach((d, i) => {
-    const y = yFor(i, model.data.length);
-    const label = svgEl("text", {
-      x: xData, y: y - 5, fill: d.dim ? "#9aa0b0" : "#e8eaf0",
-      "font-size": 9.5, "text-anchor": "middle",
-    });
-    label.textContent = truncate(d.label, 18);
-    const t = svgEl("title", {});
-    t.textContent = d.label;
-    label.append(t);
-    svg.append(label);
+  applyViews(data);
+  const kind = siteKind(data);
+  // An app is named by its own identifier: the store's host is not the target.
+  $("origin").textContent = (kind.app && data.target_name)
+    ? data.target_name : data.origin.replace(/^https?:\/\//, "");
+  $("site-kind").textContent = kind.label;
+  $("site-kind").hidden = false;
+  $("observed-at").textContent = new Date().toLocaleDateString("en-GB", {
+    day: "numeric", month: "short", year: "numeric",
   });
 
-  // Entity nodes.
-  model.entities.forEach((n, i) => {
-    const y = yFor(i, model.entities.length);
-    svg.append(svgEl("circle", {
-      cx: xEnt - 4, cy: y, r: 3.5, fill: n.dim ? "#9aa0b0" : "#9ec5ff",
-    }));
-    const label = svgEl("text", {
-      x: xEnt - 12, y: y - 5, fill: n.dim ? "#9aa0b0" : "#e8eaf0",
-      "font-size": 9.5, "text-anchor": "end",
+  const relations = data.sharing_relations || [];
+  const prose = relationCount(relations, (relation) => hasSource(relation, PROSE_SOURCES));
+  const vendors = relationCount(relations, (relation) => hasSource(relation, VENDOR_SOURCES));
+  const adtech = relationCount(relations, (relation) => sourcesOf(relation).has("ads_txt"));
+  const domains = new Set((data.traffic_contacts || []).map((contact) => contact.domain));
+  $("prose-count").textContent = prose;
+  $("vendor-count").textContent = vendors;
+  $("adtech-count").textContent = adtech;
+  $("traffic-count").textContent = domains.size;
+
+  const proseRoles = roles(data.documents, new Set([
+    "privacy_policy", "cookie_policy", "dpa", "subprocessor_list", "partners_page",
+  ]));
+  const vendorRoles = roles(data.documents, new Set(["vendor_list", "tcf_gvl", "vendors_json", "sellers_json"]));
+  const adtechRoles = roles(data.documents, new Set(["ads_txt", "app_ads_txt"]));
+  if (proseRoles.length) $("prose-sources").textContent = proseRoles.join("\n");
+  if (vendorRoles.length || (data.cmp_parties || []).length) {
+    $("vendor-sources").textContent = [...vendorRoles, ...((data.cmp_parties || []).length
+      ? ["consent interface"] : [])].join("\n");
+  }
+  if (adtechRoles.length) $("adtech-sources").textContent = adtechRoles.join("\n");
+  renderRights(data.rights || {links: {}, emails: []}, data.origin);
+}
+
+async function analyse(force = false) {
+  showStatus(force ? "Collecting fresh evidence…" : "Analysing collected sources…");
+  const [requests, cmp] = await Promise.all([observedRequests(), capturedCmp()]);
+  try {
+    const response = await fetch(`${BRIDGE}/analyze`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url: pageUrl, force, requests, cmp}),
     });
-    label.textContent = truncate(n.label, 22);
-    const t = svgEl("title", {});
-    t.textContent = n.label;
-    label.append(t);
-    svg.append(label);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    render(data);
+  } catch (error) {
+    if (error instanceof TypeError) showOffline();
+    else showStatus(`Error: ${error.message}`);
+  }
+}
+
+document.querySelectorAll("[data-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (button.dataset.view !== "main") openWorkspace(button.dataset.view);
   });
-
-  // Legend chips.
-  const actions = [...new Set(model.edges.map((e) => (e.negative ? "not" : e.action)))];
-  const legend = $("graph-legend");
-  for (const a of actions) {
-    const chip = document.createElement("span");
-    chip.className = "gl-chip";
-    const sw = document.createElement("i");
-    sw.style.background = a === "not" ? NEG_COLOR : (ACTION_COLOR[a] || "#5b6478");
-    chip.append(sw, document.createTextNode(a === "not" ? "stated NOT" : ACTION_LABEL[a] || a));
-    legend.append(chip);
-  }
-}
-
-const INDUSTRY_OPTOUTS = [
-  ["DAA WebChoices (ad opt-out)", "https://optout.aboutads.info/"],
-  ["NAI opt-out", "https://optout.networkadvertising.org/"],
-  ["Your Online Choices (EU)", "https://www.youronlinechoices.eu/"],
-  ["Global Privacy Control", "https://globalprivacycontrol.org/"],
-];
-
-function dsarTemplate(origin) {
-  return `To whom it may concern,
-
-Regarding my personal data connected to my use of ${origin}, I request under applicable data-protection law (GDPR Art. 15/17/21; CCPA/CPRA):
-
-1. Access to the personal data you hold about me;
-2. The categories of third parties with whom it has been shared or sold;
-3. Deletion of my personal data; and
-4. That you stop selling or sharing my personal data with third parties.
-
-Please respond within the statutory deadline.
-
-Kind regards`;
-}
-
-function rightsRow(label, href, cls) {
-  const a = document.createElement("a");
-  a.className = "rbtn " + (cls || "");
-  a.textContent = label;
-  a.href = href;
-  if (!href.startsWith("mailto:")) {
-    a.target = "_blank";
-    a.rel = "noreferrer";
-  }
-  return a;
-}
-
-function renderRights(rights, origin) {
-  const box = $("rights");
-  box.innerHTML = "";
-  const links = rights.links || {};
-  const emails = rights.emails || [];
-
-  if (links.do_not_sell) {
-    box.append(rightsRow("Opt out of sale / sharing on this site", links.do_not_sell, "primary"));
-  } else {
-    const p = document.createElement("p");
-    p.className = "empty tight";
-    p.textContent = "No do-not-sell / privacy-choices page found on this site.";
-    box.append(p);
-  }
-
-  if (emails.length) {
-    const subject = "Personal data access / deletion / opt-out request";
-    const mailto = `mailto:${emails[0]}?subject=${encodeURIComponent(subject)}` +
-      `&body=${encodeURIComponent(dsarTemplate(origin))}`;
-    box.append(rightsRow(`Email privacy contact — ${emails[0]}`, mailto, "primary"));
-  }
-
-  const copy = document.createElement("button");
-  copy.className = "rbtn";
-  copy.textContent = "Copy data-request template";
-  copy.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(dsarTemplate(origin));
-      copy.textContent = "Copied ✓";
-      setTimeout(() => { copy.textContent = "Copy data-request template"; }, 1600);
-    } catch {
-      copy.textContent = "Copy failed";
-    }
-  });
-  box.append(copy);
-
-  if (links.privacy_policy) {
-    box.append(rightsRow("Read the privacy policy", links.privacy_policy));
-  }
-  if (links.cookie_policy) {
-    box.append(rightsRow("Read the cookie policy", links.cookie_policy));
-  }
-
-  const h = document.createElement("p");
-  h.className = "rights-sub";
-  h.textContent = "Industry-wide opt-outs";
-  box.append(h);
-  for (const [label, url] of INDUSTRY_OPTOUTS) {
-    box.append(rightsRow(label, url, "small"));
-  }
-}
-
-// -- boot ------------------------------------------------------------------ //
-let currentUrl = null;
+});
+$("open-graph").addEventListener("click", () => openWorkspace("main"));
+$("rescan").addEventListener("click", () => analyse(true));
+$("copy-email").addEventListener("click", async () => {
+  await navigator.clipboard.writeText($("privacy-email").textContent);
+  $("copy-email").textContent = "Copied";
+});
 
 (async function init() {
-  currentUrl = await activeTabUrl();
-  if (!currentUrl || !/^https?:/.test(currentUrl)) {
-    showStatus("Open a website tab (http/https) to analyze it.");
+  pageTab = await activeTab();
+  pageUrl = pageTab && pageTab.url;
+  if (!pageUrl || !/^https?:\/\//.test(pageUrl)) {
+    showStatus("Open an HTTP or HTTPS page to analyse it.");
     return;
   }
-  analyze(currentUrl, false);
-})();
-
-$("rescan").addEventListener("click", () => {
-  if (currentUrl) analyze(currentUrl, true);
-});
-
-// The multi-hop network runs to thousands of parties and takes minutes to
-// collect, so it opens in a tab of its own rather than inside the popup.
-$("open-graph").addEventListener("click", async () => {
-  if (!currentUrl) return;
-  const tab = await activeTab();
-  const params = new URLSearchParams({ url: currentUrl });
-  if (tab) params.set("tab", String(tab.id));
-  await browser.tabs.create({
-    url: browser.runtime.getURL(`graph.html?${params.toString()}`),
-  });
-  window.close();
-});
+  analyse(false);
+}());

@@ -8,7 +8,7 @@ from tpd.entities import (
     entity_for_domain,
     registrable_domain,
 )
-from tpd.traffic import observed_hosts
+from tpd.traffic import observed_contacts, observed_hosts
 
 
 class TestCleanCompanyName:
@@ -86,3 +86,10 @@ class TestObservedHosts:
     def test_first_party_tokens_are_honoured(self):
         reqs = [{"url": "https://static.guim.co.uk/x.js", "type": "script"}]
         assert observed_hosts(reqs, self.ORIGIN, first_party={"guim"}) == []
+
+    def test_contacts_retain_domains_without_an_attributed_organisation(self):
+        reqs = [{"url": "https://unmapped-example.test/pixel", "type": "image"}]
+        (contact,) = observed_contacts(reqs, self.ORIGIN)
+        assert contact["domain"] == "unmapped-example.test"
+        assert contact["entity"] == ""
+        assert contact["basis"] == "domain"

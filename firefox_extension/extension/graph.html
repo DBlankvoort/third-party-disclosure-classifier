@@ -1,105 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="graph.css" />
-  <title>Sharing network</title>
-</head>
+<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><link rel="stylesheet" href="graph.css" /><title>Evidence network</title></head>
 <body>
   <header>
-    <div class="brand">
-      <span class="mark" aria-hidden="true"></span>
-      <div>
-        <h1>Third-party sharing network</h1>
-        <p id="origin" class="origin">—</p>
-      </div>
-    </div>
-
+    <div class="brand"><span class="network-mark">⌘</span><div><h1>Evidence network</h1><p><span id="origin">—</span> <span id="site-kind" class="kind-chip" hidden>—</span> · graph crawl session</p></div></div>
     <div class="controls">
-      <label class="field">hops
-        <input id="hops" class="num" type="number" min="1" step="1" value="1" />
-      </label>
-      <label class="field">minutes
-        <input id="time-limit" class="num" type="number" min="0" step="1" value="0"
-               title="wall clock the walk may run for; 0 for no limit" />
-      </label>
-      <div class="seg" id="track" role="radiogroup" aria-label="Arrangements to show">
-        <button data-track="personal_data" class="on">personal data</button>
-        <button data-track="inventory">ad inventory</button>
-        <button data-track="both">both</button>
-      </div>
-      <button id="run" class="btn primary">Collect</button>
-      <button id="stop" class="btn" hidden>Stop</button>
-      <button id="edit-toggle" class="btn">Edit</button>
-      <input id="search" class="search" type="search" placeholder="Find an organisation…" />
+      <input id="search" type="search" placeholder="Find an organisation" />
+      <label>Depth <input id="hops" type="number" min="1" value="1" /></label>
+      <label>Minutes <input id="time-limit" type="number" min="0" value="0" /></label>
+      <button id="run" class="primary">Collect evidence</button><button id="stop" hidden>Stop</button>
+      <button id="edit-toggle">Edit graph</button>
     </div>
   </header>
-
-  <div id="progress" class="progress" hidden>
-    <div class="spinner" aria-hidden="true"></div>
-    <p id="progress-text">Starting…</p>
-    <div class="bar"><i id="progress-bar"></i></div>
-  </div>
-
+  <nav id="kind-nav" aria-label="Proposition views">
+    <button data-kind="main">Main findings</button>
+    <button data-kind="discloses_relation_with">Prose disclosures</button>
+    <button data-kind="lists_vendor">Vendor listings</button>
+    <button data-kind="authorises_inventory_sale">Ad-tech authorisations</button>
+    <button data-kind="contacts_domain">Web traffic</button>
+  </nav>
+  <div id="progress" class="progress" hidden><span class="spinner"></span><p id="progress-text">Starting…</p><div class="bar"><i id="progress-bar"></i></div></div>
   <main>
-    <div class="stage">
-      <canvas id="canvas"></canvas>
-      <div id="tooltip" class="tooltip" hidden></div>
-      <div id="empty" class="empty-state">
-        <p><strong>No network collected yet.</strong></p>
-        <p>Choose a depth and press Collect. Every party that can be resolved to
-           a site is crawled, so three hops and beyond run for tens of minutes
-           and reach thousands of organisations.</p>
-      </div>
-      <div class="legend" id="legend"></div>
-      <div class="hint">drag to pan · scroll to zoom · click a node for its evidence · double-click to fit</div>
-    </div>
-
+    <section class="stage">
+      <canvas id="canvas"></canvas><div id="tooltip" class="tooltip" hidden></div>
+      <div id="empty" class="empty-state"><strong>No evidence network collected yet</strong><span>Choose a depth and collect evidence from this source.</span></div>
+      <div id="legend" class="legend"></div>
+      <div class="canvas-tools"><button id="fit-view">Fit</button><label><input id="show-labels" type="checkbox" /> All labels</label><label><input id="f-generic" type="checkbox" checked /> Generic categories</label><label><input id="f-domains" type="checkbox" checked /> Domains</label><label><input id="f-ungrounded" type="checkbox" checked /> Unverified organisation names</label></div>
+    </section>
     <aside class="panel">
-      <section class="stats">
-        <div><span id="stat-recipients">0</span><label>parties data reaches</label></div>
-        <div><span id="stat-edges">0</span><label id="stat-edges-label">personal-data arrangements</label></div>
-        <div><span id="stat-crawled">0</span><label>sites collected</label></div>
-      </section>
-
-      <section class="filters">
-        <h2>Show</h2>
-        <label><input type="checkbox" id="f-policy" checked /> stated in a policy</label>
-        <label><input type="checkbox" id="f-registry" checked /> named in a registry</label>
-        <label><input type="checkbox" id="f-traffic" checked /> observed in traffic</label>
-        <label><input type="checkbox" id="f-generic" checked /> unnamed categories</label>
-        <label><input type="checkbox" id="f-domains" /> contacted domains</label>
-        <label><input type="checkbox" id="f-ungrounded" checked /> names no register knows</label>
-      </section>
-
-      <section id="edit-box" class="detail edit" hidden>
-        <h2>Editing</h2>
-        <div id="edit-actions" class="edit-actions"></div>
-        <p id="edit-status" class="empty tight"></p>
-      </section>
-
-      <section id="detail" class="detail">
-        <h2>Selection</h2>
-        <p class="empty">Click a node to see who it receives from and hands on to.</p>
-      </section>
-
-      <section id="unresolved-box" class="detail" hidden>
-        <h2>Named but not reachable <span id="unresolved-count" class="count">0</span></h2>
-        <p class="empty tight">
-          These parties are named in documents but resolve to no site.
-        </p>
-        <div id="unresolved" class="taglist"></div>
-      </section>
+      <section class="stats"><div><strong id="stat-recipients">0</strong><span id="stat-parties-label">organisations shown</span></div><div><strong id="stat-edges">0</strong><span id="stat-edges-label">propositions shown</span></div><div><strong id="stat-crawled">0</strong><span>sites analysed</span></div></section>
+      <section id="edit-box" class="detail edit" hidden><h2>Editing</h2><div id="edit-actions"></div><p id="edit-status" class="empty"></p></section>
+      <section id="detail" class="detail"><h2>Evidence inspector</h2><p class="empty">Select a node to inspect its propositions and evidence records.</p></section>
     </aside>
   </main>
-
-  <section id="offline" class="offline" hidden>
-    <p><strong>Local analyzer not reachable.</strong></p>
-    <p>Start the bridge, then reload this page:</p>
-    <pre>python firefox-extension/server/server.py</pre>
-  </section>
-
+  <section id="offline" class="offline" hidden><strong>Local analyser not reachable</strong><p>Start the bridge and reload this page.</p></section>
   <script src="graph.js"></script>
-</body>
-</html>
+</body></html>

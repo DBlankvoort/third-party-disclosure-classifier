@@ -12,7 +12,7 @@ from .structured_relations import DOWNSTREAM
 
 NARRATIVE_ROLES = {
     "privacy_policy", "cookie_policy", "do_not_sell", "dpa", "vendor_list",
-    "subprocessor_list", "partners_page", "help_doc",
+    "subprocessor_list", "partners_page",
 }
 
 _DATA_TYPE = "personal data"

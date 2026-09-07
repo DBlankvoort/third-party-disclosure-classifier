@@ -104,6 +104,16 @@ class TestAddTarget:
         assert edge.evidence[0].purposes == []
         assert edge.evidence[0].track == ""
 
+    def test_unattributed_contact_keeps_the_domain_without_a_resolution_edge(self):
+        g = SharingGraph()
+        tid = add_target(g, "t", "t", [], observed=[
+            {"domain": "unmapped-example.test", "entity": "", "basis": "domain",
+             "types": ["image"], "requests": 1},
+        ])
+        did = "domain::unmapped-example.test"
+        assert (EdgeKind.CONTACTS_DOMAIN.value, tid, did) in g.edges
+        assert not any(edge.kind is EdgeKind.RESOLVES_TO for edge in g.edges.values())
+
     def test_unspecified_parties_become_generic_nodes(self):
         g = SharingGraph()
         add_target(g, "t", "t", [_rel("advertising partners", unspecified=True)])

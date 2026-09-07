@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import time
+from pathlib import Path
 
 PRE_CONSENT = "pre_consent"
 POST_CONSENT = "post_consent"
@@ -138,3 +141,63 @@ def merge_requests(*lists) -> list[dict]:
             if rank < order.get(held.get("consent") or "", 1):
                 held["consent"] = req.get("consent") or ""
     return list(best.values())
+
+
+# --------------------------------------------------------------------------- #
+# Cached captures
+# --------------------------------------------------------------------------- #
+TRAFFIC_FILE = "traffic.json"
+
+PROBE_MAX_AGE = 7 * 24 * 3600
+
+
+def read_probe(target_dir: str | Path) -> dict | None:
+    """A stored capture, or ``None`` where none was ever written."""
+    path = Path(target_dir) / TRAFFIC_FILE
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("requests"), list):
+        return None
+    return record
+
+
+def write_probe(target_dir: str | Path, record: dict) -> None:
+    path = Path(target_dir)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / TRAFFIC_FILE).write_text(
+            json.dumps(record), encoding="utf-8")
+    except OSError as exc:
+        print(f"[probe] capture not stored: {exc}", file=sys.stderr)
+
+
+def _fresh(record: dict | None, max_age: float) -> bool:
+    if record is None:
+        return False
+    if max_age <= 0:
+        return True
+    return (time.time() - float(record.get("probed_at") or 0)) < max_age
+
+
+def cached_probe(
+    target_dir: str | Path,
+    origin: str,
+    force: bool = False,
+    max_age: float = PROBE_MAX_AGE,
+) -> dict:
+    """Load ``origin`` in a clean profile"""
+    stored = read_probe(target_dir)
+    if not force and _fresh(stored, max_age):
+        return {**stored, "cached": True}
+    requests, accepted = probe_origin(origin)
+    if not requests:
+        if stored is not None:
+            return {**stored, "cached": True}
+        return {"origin": origin, "requests": [], "accepted": "",
+                "probed_at": 0.0, "cached": False, "available": False}
+    record = {"origin": origin, "requests": requests, "accepted": accepted,
+              "probed_at": time.time(), "available": True}
+    write_probe(target_dir, record)
+    return {**record, "cached": False}

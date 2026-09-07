@@ -72,8 +72,11 @@
     const vendors = (gvl && gvl.vendors) || {};
     const ids = vendorIds(tcData);
     const out = [];
-    const keys = ids.size ? [...ids] : Object.keys(vendors).map(Number);
-    for (const id of keys) {
+    // Only vendors this dialog's consent string actually covers. Falling back
+    // to the whole vendor list would report the ~1000-entry global registry as
+    // though this site had named every one of them.
+    if (!ids.size) return null;
+    for (const id of [...ids]) {
       const v = vendors[String(id)];
       if (!v || !v.name) {
         if (id > 0) out.push({ id });
@@ -99,19 +102,42 @@
   const MAX_NAME = 60;
   const MAX_DOM_NAMES = 1000;
 
+  function queryRoots() {
+    const roots = [document];
+    for (let i = 0; i < roots.length; i++) {
+      const root = roots[i];
+      for (const el of root.querySelectorAll("*")) {
+        if (el.shadowRoot) roots.push(el.shadowRoot);
+        if (el.tagName === "IFRAME") {
+          try {
+            if (el.contentDocument) roots.push(el.contentDocument);
+          } catch (e) {
+            // Cross-origin consent frames require separate instrumentation.
+          }
+        }
+      }
+    }
+    return roots;
+  }
+
+  function dialogRoots() {
+    const dialogs = [];
+    for (const searchRoot of queryRoots()) {
+      for (const sel of DIALOG_SELECTORS) {
+        try {
+          for (const el of searchRoot.querySelectorAll(sel)) dialogs.push(el);
+        } catch (e) {
+          // A vendor-specific selector may be unsupported by an older page.
+        }
+      }
+    }
+    return dialogs;
+  }
+
   function fromDom() {
     const names = [];
     const seen = new Set();
-    const roots = [];
-    for (const sel of DIALOG_SELECTORS) {
-      let found;
-      try {
-        found = document.querySelectorAll(sel);
-      } catch (e) {
-        continue;
-      }
-      for (const el of found) roots.push(el);
-    }
+    const roots = dialogRoots();
     for (const root of roots) {
       const cells = root.querySelectorAll(
         "li, td:first-child, th:first-child, [class*='vendor'], [class*='partner']",
@@ -130,6 +156,22 @@
     return names.length ? { vendors: names, source: "dom", cmp: "" } : null;
   }
 
+  async function revealVendorList() {
+    const controlText = /^(?:manage|show|view|see|customi[sz]e|partners?|vendors?|preferences?|settings)/i;
+    for (const root of dialogRoots()) {
+      for (const control of root.querySelectorAll("button, a, [role='button']")) {
+        if (!controlText.test((control.textContent || "").trim())) continue;
+        try {
+          control.click();
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          return;
+        } catch (e) {
+          // Continue through accessible controls without changing consent.
+        }
+      }
+    }
+  }
+
   return (async () => {
     let payload = null;
     try {
@@ -140,6 +182,10 @@
     if (!payload) {
       try {
         payload = fromDom();
+        if (!payload) {
+          await revealVendorList();
+          payload = fromDom();
+        }
       } catch (e) {
         payload = null;
       }

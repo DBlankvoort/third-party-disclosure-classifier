@@ -26,12 +26,13 @@ def recorded(monkeypatch):
     fetched: list[str] = []
     relations: dict[str, list[dict]] = {}
 
-    def fake_fetch(corpus, origin, force=False, delay=0.2, render=True):
+    def fake_fetch(corpus, origin, force=False, delay=0.2, render=True, target=None):
         fetched.append(origin)
         return True
 
     def fake_analyse(corpus, origin, requests=None, force=False, delay=0.2,
-                     fetched=False, cmp=None, probe=False):
+                     fetched=False, cmp=None, probe=False, evidence_kind="main",
+                     target=None, site_kind=""):
         return list(relations.get(origin, [])), []
 
     monkeypatch.setattr(expand_mod, "fetch_origin", fake_fetch)
@@ -250,7 +251,8 @@ class TestProgress:
         recorded["relations"]["https://seed.example"] = [_rel("Criteo")]
 
         def failing(corpus, origin, requests=None, force=False, delay=0.2,
-                    fetched=False, cmp=None, probe=False):
+                    fetched=False, cmp=None, probe=False, evidence_kind="main",
+                     target=None, site_kind=""):
             if origin == "https://criteo.com":
                 raise FileNotFoundError(origin)
             return [_rel("Criteo")], []
@@ -266,3 +268,80 @@ class TestProgress:
         walk = _walk(tmp_path, 2)
         walk.run()
         assert walk.graph.termination(entity_node_id("Criteo")) == "terminal"
+
+    def test_traffic_walk_probes_without_collecting_documents(
+        self, tmp_path, monkeypatch,
+    ):
+        def no_fetch(*args, **kwargs):
+            raise AssertionError("traffic walks must not fetch document sets")
+
+        def probe(target_dir, origin, force=False, max_age=0.0):
+            domain = "doubleclick.net" if "seed.example" in origin else "criteo.com"
+            return {"requests": [{"url": f"https://{domain}/pixel", "type": "image"}],
+                    "accepted": "", "cached": False, "available": True}
+
+        monkeypatch.setattr(expand_mod, "fetch_origin", no_fetch)
+        monkeypatch.setattr(expand_mod, "cached_probe", probe)
+        walk = _walk(tmp_path, 2, evidence_kind="contacts_domain")
+        walk.run()
+        assert entity_node_id("Google") in walk.graph.nodes
+        assert entity_node_id("Criteo") in walk.graph.nodes
+
+
+class TestEvidenceKind:
+    def test_unknown_kind_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="unknown evidence kind"):
+            _walk(tmp_path, 1, evidence_kind="unsupported")
+
+
+class TestFirstParty:
+    """The popup and the walk must agree on which domains are the site itself."""
+
+    ORIGIN = "https://www.smbc-comics.com"
+
+    def _corpus(self, tmp_path, roles=("privacy_policy",)):
+        from tpd.collect.base import CollectedDoc, Corpus
+
+        corpus = Corpus(tmp_path)
+        target = target_for_origin(self.ORIGIN)
+        docs = [
+            CollectedDoc(doc_id=f"d{i}", url=f"{self.ORIGIN}/{role}", role=role,
+                         http_status=200, raw_path=f"{target.id}/docs/d{i}.html")
+            for i, role in enumerate(roles)
+        ]
+        corpus.write_manifest(target, docs)
+        return corpus, target
+
+    def test_a_policy_url_contributes_its_brand_token(self, tmp_path):
+        corpus, target = self._corpus(tmp_path)
+        assert expand_mod.first_party_for_target(corpus, target) == {
+            "smbc", "comics", "smbc-comics",
+        }
+
+    def test_the_walk_derives_it_exactly_as_the_popup_does(self, tmp_path):
+        from tpd.classify.named_entities import first_party_tokens
+
+        corpus, target = self._corpus(tmp_path)
+        _, docs = corpus.read_manifest(target.id)
+        popup = first_party_tokens(
+            expand_mod.first_party_urls(target, docs), name=target.name)
+        assert expand_mod.first_party_for_target(corpus, target) == popup
+
+    def test_a_missing_corpus_still_yields_the_name_s_tokens(self, tmp_path):
+        from tpd.collect.base import Corpus
+
+        target = target_for_origin(self.ORIGIN)
+        assert expand_mod.first_party_for_target(Corpus(tmp_path), target) == {
+            "smbc", "comics",
+        }
+
+    def test_the_traffic_walk_drops_the_site_s_own_domains(self, tmp_path):
+        corpus, _ = self._corpus(tmp_path)
+        requests = [
+            {"url": "https://smbc-comics.net/a.png", "type": "image"},
+            {"url": "https://doubleclick.net/a", "type": "script"},
+        ]
+        _relations, observed = expand_mod.analyse_origin(
+            corpus, self.ORIGIN, requests=requests, evidence_kind="contacts_domain",
+        )
+        assert [o["domain"] for o in observed] == ["doubleclick.net"]

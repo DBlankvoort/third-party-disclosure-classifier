@@ -4,120 +4,44 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="popup.css" />
-  <title>Disclosure Lens</title>
+  <title>Third-Party Disclosure Lens</title>
 </head>
 <body>
   <header>
-    <div class="brand">
-      <span class="mark" aria-hidden="true"></span>
-      <div>
-        <h1>Third-Party Disclosure Lens</h1>
-        <p id="origin" class="origin">—</p>
-      </div>
-    </div>
-    <button id="rescan" class="rescan" title="Re-crawl (ignore cache)" hidden>↻</button>
+    <div class="brand"><span class="lens" aria-hidden="true"></span><div>
+      <h1>Third-Party Disclosure Lens</h1>
+      <p><span>Source:</span> <strong id="origin">—</strong>
+        <span id="site-kind" class="kind-chip" hidden>—</span>
+        <span class="date-label">Observation date:</span> <strong id="observed-at">—</strong></p>
+    </div></div>
+    <button id="rescan" class="outline" hidden><span aria-hidden="true">↻</span> Rescan</button>
   </header>
-
+  <nav aria-label="Evidence views">
+    <button class="active" data-view="main"><i>▤</i>Main findings</button>
+    <button data-view="prose"><i>□</i>Prose</button>
+    <button data-view="vendors"><i>♧</i>Vendors</button>
+    <button data-view="adtech"><i>&lt;/&gt;</i>Ad-tech</button>
+    <button data-view="traffic"><i>⌘</i>Traffic</button>
+  </nav>
   <main>
-    <!-- Status / errors -->
-    <section id="status" class="status">
-      <div class="spinner" aria-hidden="true"></div>
-      <p id="status-text">Analyzing…</p>
-    </section>
-
-    <!-- Result -->
+    <section id="status" class="status"><span class="spinner"></span><p id="status-text">Analysing…</p></section>
     <section id="result" hidden>
-      <!-- Headline -->
-      <div id="headline" class="headline">
-        <span id="source-pill" class="pill subtle"></span>
+      <h2>Evidence concerning third-party disclosure</h2>
+      <p class="view-scope">This page only · current browser observation</p>
+      <div class="evidence-grid">
+        <button class="evidence-card" data-view="prose"><span class="card-head"><i class="prose">□</i><strong id="prose-count">0</strong></span><span class="card-title">Disclosed relations</span><span id="prose-sources" class="card-detail">No analysed prose sources</span></button>
+        <button class="evidence-card" data-view="vendors"><span class="card-head"><i class="vendors">♧</i><strong id="vendor-count">0</strong></span><span class="card-title">Vendor listings</span><span id="vendor-sources" class="card-detail">No vendor records</span></button>
+        <button class="evidence-card" data-view="adtech"><span class="card-head"><i class="adtech">&lt;/&gt;</i><strong id="adtech-count">0</strong></span><span class="card-title">Sale authorisations</span><span id="adtech-sources" class="card-detail">No advertising registry</span></button>
+        <button class="evidence-card" data-view="traffic"><span class="card-head"><i class="traffic">◎</i><strong id="traffic-count">0</strong></span><span class="card-title">Contacted domains</span><span class="card-detail">Observed while this page loaded</span></button>
       </div>
-
-      <div class="columns">
-        <div class="col">
-          <h2 class="section-title">Where disclosures were found</h2>
-          <ul id="docs" class="docs"></ul>
-          <p id="docs-empty" class="empty" hidden>
-            No document naming a third party was found at this origin.
-          </p>
-
-          <h2 class="section-title">What they disclose</h2>
-          <div class="matrix-wrap">
-            <table id="matrix" class="matrix" aria-label="Disclosure medium by specificity">
-              <thead>
-                <tr>
-                  <th class="corner"></th>
-                  <th>named</th><th>category</th><th>generic</th>
-                </tr>
-              </thead>
-              <tbody><!-- rows injected per medium --></tbody>
-            </table>
-          </div>
-
-          <h2 class="section-title">Who receives what</h2>
-          <ul id="relations" class="relations"></ul>
-          <p id="relations-empty" class="empty" hidden>
-            No structural sharing relationships could be extracted.
-          </p>
-          <p id="relations-off" class="empty" hidden>
-            PoliGraph analysis is disabled on the local bridge.
-          </p>
-          <ul id="observed-box" class="relations" hidden>
-            <li class="rel-card">
-              <div class="rel-entity">
-                <span class="rel-name plain">Contacted by this page</span>
-                <span id="observed-count" class="rel-examples"></span>
-              </div>
-              <p id="undisclosed-note" class="empty tight" hidden></p>
-              <div id="observed" class="taglist tight"></div>
-            </li>
-          </ul>
-
-          <ul id="firstparty-box" class="relations" hidden>
-            <li class="rel-card">
-              <div class="rel-entity">
-                <span class="rel-name plain">First-party collection</span>
-                <span id="firstparty-count" class="rel-examples"></span>
-              </div>
-              <div id="firstparty" class="taglist tight"></div>
-            </li>
-          </ul>
-
-          <ul id="cmp-box" class="relations" hidden>
-            <li class="rel-card">
-              <div class="rel-entity">
-                <span class="rel-name plain">Named by the consent dialog</span>
-                <span id="cmp-count" class="rel-examples"></span>
-              </div>
-              <p id="cmp-note" class="empty tight" hidden></p>
-              <div id="cmp" class="taglist tight"></div>
-            </li>
-          </ul>
-        </div>
-
-        <div class="col">
-          <h2 class="section-title">Sharing graph</h2>
-          <div id="graph-wrap" class="graph-wrap">
-            <svg id="graph" role="img" aria-label="Data-sharing graph"></svg>
-          </div>
-          <p id="graph-empty" class="empty" hidden>No relations to draw.</p>
-          <div class="graph-legend" id="graph-legend"></div>
-          <button id="open-graph" class="rbtn primary wide">
-            Explore the network ↗
-          </button>
-
-          <h2 class="section-title">Your rights</h2>
-          <div id="rights" class="rights"></div>
-        </div>
+      <div class="primary-actions">
+        <button id="open-graph" class="action-card graph-action"><i aria-hidden="true">⌘</i><span><strong>Evidence network ↗</strong><small>Explore typed propositions and their sources</small></span></button>
+        <a id="rights-action" class="action-card rights-action" href="#"><i aria-hidden="true">♙</i><span><strong>Exercise your rights ↗</strong><small id="rights-detail">Find privacy choices and contact details</small></span></a>
       </div>
+      <section class="contact" id="contact" hidden><span>Privacy contact</span><a id="privacy-email"></a><button id="copy-email" title="Copy email address">Copy</button></section>
     </section>
-
-    <section id="offline" class="offline" hidden>
-      <p><strong>Local analyzer not reachable.</strong></p>
-      <p>Start the bridge, then re-open this popup:</p>
-      <pre>python firefox-extension/server/server.py</pre>
-    </section>
+    <section id="offline" class="offline" hidden><strong>Local analyser not reachable</strong><p>Start the bridge and reopen this popup.</p><code>python firefox_extension/server/server.py</code></section>
   </main>
-
   <script src="popup.js"></script>
 </body>
 </html>

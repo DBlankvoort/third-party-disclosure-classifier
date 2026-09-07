@@ -901,14 +901,16 @@ def attach(
 
     for obs in observed or ():
         entity = obs.get("entity") or ""
-        if not entity:
-            continue
-        owner = entity_node(entity, hop=hop + 1)
-        eid = owner.id
-        if eid == tid:
-            continue
-        graph.add_node(owner)
-        for domain in obs.get("domains") or ():
+        domains = obs.get("domains") or ([obs.get("domain")] if obs.get("domain") else [])
+        eid = ""
+        if entity:
+            owner = entity_node(entity, hop=hop + 1)
+            eid = owner.id
+            if eid != tid:
+                graph.add_node(owner)
+            else:
+                eid = ""
+        for domain in domains:
             did = domain_node_id(domain)
             graph.add_node(Node(
                 id=did, type=NodeType.DOMAIN, display_name=domain,
@@ -921,9 +923,10 @@ def attach(
                 track="", subject=UNKNOWN,
                 consent=obs.get("consent") or "",
             ))
-            graph.add_edge(EdgeKind.RESOLVES_TO, did, eid, Evidence(
-                source=EvidenceSource.RESOLUTION,
-                evidence_type=EvidenceType.DOMAIN_RESOLUTION, hop=hop,
-                snippet=obs.get("basis", ""),
-                track="", subject=UNKNOWN,
-            ))
+            if eid:
+                graph.add_edge(EdgeKind.RESOLVES_TO, did, eid, Evidence(
+                    source=EvidenceSource.RESOLUTION,
+                    evidence_type=EvidenceType.DOMAIN_RESOLUTION, hop=hop,
+                    snippet=obs.get("basis", ""),
+                    track="", subject=UNKNOWN,
+                ))

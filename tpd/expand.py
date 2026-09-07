@@ -28,14 +28,15 @@ from .collect.runner import (
     render_thin_docs,
 )
 from .entities import observed_domain_hints, resolve_entity_domain, resolve_name
-from .probe import merge_requests, probe_origin
+from .probe import cached_probe, merge_requests
 from .sharing_graph import (
     NodeType,
     SharingGraph,
     add_target,
     expand_node,
 )
-from .traffic import observed_hosts
+from .site_kind import kind_for, profile, store_target, supports
+from .traffic import observed_contacts
 from .typology import TargetType
 
 FETCH_WORKERS = 8
@@ -72,18 +73,73 @@ def target_for_origin(origin: str) -> Target:
     )
 
 
+def target_for_url(url: str) -> Target:
+    """The target one live URL names"""
+    return store_target(url) or target_for_origin(origin_of(url))
+
+
+POLICY_ROLES = ("privacy_policy", "cookie_policy", "do_not_sell")
+
+
+def first_party_urls(target: Target, docs) -> list[str]:
+    """The URLs a target's own party speaks from."""
+    return [target.seed_policy_url] + [
+        d.url for d in docs if d.role in POLICY_ROLES
+    ]
+
+
+def first_party_for_target(corpus: Corpus, target: Target) -> set[str]:
+    """The brand tokens naming one target's own party."""
+    try:
+        _, docs = corpus.read_manifest(target.id)
+    except (FileNotFoundError, OSError, ValueError, KeyError):
+        docs = []
+    return first_party_tokens(first_party_urls(target, docs), name=target.name)
+
+
+def probed_requests(corpus: Corpus, target: Target, origin: str,
+                    force: bool = False) -> list[dict]:
+    """One clean-profile capture of ``origin``"""
+    return cached_probe(corpus.root / target.id, origin, force=force)["requests"]
+
+
+EDGE_KINDS = {
+    "main", "discloses_relation_with", "lists_vendor",
+    "authorises_inventory_sale", "contacts_domain",
+}
+
+
 def relations_for_target(
     corpus: Corpus, target_id: str, docs, first_party,
     target_type: str = TargetType.WEBSITE.value,
+    evidence_kind: str = "main",
+    site_kind: str = "",
 ) -> list[dict]:
     """Every sharing relation one target's document set supports."""
-    lists = [
-        structured_relations_for_target(corpus, docs, first_party=first_party),
-        named_org_relations(corpus, docs, target_type=target_type,
-                            first_party=first_party),
-    ]
-    if poligraph_available():
+    site_kind = site_kind or target_type
+    lists = []
+    if evidence_kind in {"main", "discloses_relation_with"}:
+        lists.extend([
+            structured_relations_for_target(
+                corpus, docs, first_party=first_party, registry_kinds=frozenset(),
+            ),
+            named_org_relations(corpus, docs, target_type=target_type,
+                                first_party=first_party),
+        ])
+    if evidence_kind in {"main", "discloses_relation_with"} and poligraph_available():
         lists.append(target_relations(corpus, target_id, docs, first_party=first_party))
+    if (evidence_kind in {"main", "lists_vendor"}
+            and supports(site_kind, "lists_vendor")):
+        lists.append(structured_relations_for_target(
+            corpus, docs, first_party=first_party,
+            registry_kinds=frozenset({"sellers_json", "tcf_gvl", "vendors_json"}),
+        ))
+    if (evidence_kind in {"main", "authorises_inventory_sale"}
+            and supports(site_kind, "authorises_inventory_sale")):
+        lists.append(structured_relations_for_target(
+            corpus, docs, first_party=first_party,
+            registry_kinds=frozenset({"ads_txt"}),
+        ))
     return merge_relations(lists)
 
 
@@ -96,33 +152,46 @@ def analyse_origin(
     fetched: bool = False,
     cmp=None,
     probe: bool = False,
+    evidence_kind: str = "main",
+    target: Target | None = None,
+    site_kind: str = "",
 ) -> tuple[list[dict], list[dict]]:
     """Collect ``origin`` if needed and return its ``(relations, observed)``."""
-    target = target_for_origin(origin)
+    target = target or target_for_origin(origin)
+    if evidence_kind == "contacts_domain":
+        if probe:
+            requests = merge_requests(
+                requests, probed_requests(corpus, target, origin, force=force))
+        return [], observed_contacts(
+            requests, origin, first_party=first_party_for_target(corpus, target),
+        )
     if not fetched:
-        fetch_origin(corpus, origin, force=force, delay=delay)
+        fetch_origin(corpus, origin, force=force, delay=delay, target=target)
     if probe:
-        probed, _accepted = probe_origin(origin)
-        requests = merge_requests(requests, probed)
+        requests = merge_requests(
+            requests, probed_requests(corpus, target, origin, force=force))
     _, docs = corpus.read_manifest(target.id)
-    fp_urls = [target.seed_policy_url] + [
-        d.url for d in docs
-        if d.role in ("privacy_policy", "cookie_policy", "do_not_sell")
-    ]
-    first_party = first_party_tokens(fp_urls, name=target.name)
+    first_party = first_party_tokens(
+        first_party_urls(target, docs), name=target.name)
+    kind = site_kind or kind_for(origin, target, docs)
     relations = merge_relations([
         relations_for_target(corpus, target.id, docs, first_party,
-                             target_type=target.type),
-        cmp_relations(cmp, first_party=first_party),
+                             target_type=target.type, evidence_kind=evidence_kind,
+                             site_kind=kind),
+        cmp_relations(cmp, first_party=first_party)
+        if evidence_kind in {"main", "lists_vendor"} and supports(kind, "lists_vendor")
+        else [],
     ])
-    observed = observed_hosts(requests, origin, first_party=first_party)
+    observed = (observed_contacts(requests, origin, first_party=first_party)
+                if supports(kind, "contacts_domain") else [])
     return relations, observed
 
 
 def fetch_origin(corpus: Corpus, origin: str, force: bool = False,
-                 delay: float = 0.2, render: bool = True) -> bool:
+                 delay: float = 0.2, render: bool = True,
+                 target: Target | None = None) -> bool:
     """Collect one origin's document set, reusing the corpus when present."""
-    target = target_for_origin(origin)
+    target = target or target_for_origin(origin)
     manifest = corpus.root / target.id / "manifest.json"
     if not manifest.exists() or force:
         fetch_target(target, corpus, force=force, delay=delay)
@@ -164,10 +233,11 @@ def _close_renderer(gate: threading.Barrier) -> None:
 
 def _analyse_job(payload: tuple) -> tuple[list[dict], list[dict], bool]:
     """Analyse one already-collected origin in a worker process."""
-    corpus_root, origin, delay, probe = payload
+    corpus_root, origin, delay, probe, evidence_kind = payload
     try:
         relations, observed = analyse_origin(
             Corpus(corpus_root), origin, delay=delay, fetched=True, probe=probe,
+            evidence_kind=evidence_kind,
         )
     except (FileNotFoundError, ValueError):
         return [], [], False
@@ -232,11 +302,14 @@ class Expansion:
         render_workers: int = RENDER_WORKERS,
         time_limit: float = TIME_LIMIT,
         chunk: int = CHUNK,
-        probe: bool = False,
+        probe: bool | None = None,
+        evidence_kind: str = "main",
     ) -> None:
         self.corpus = Corpus(corpus_root)
         self.seed_url = seed_url
         self.origin = origin_of(seed_url)
+        self.target = target_for_url(seed_url)
+        self.site_kind = kind_for(self.origin, self.target)
         self.hops = max(1, int(hops))
         self.origin_deadline = origin_deadline
         self.party_deadline = party_deadline
@@ -250,7 +323,17 @@ class Expansion:
         self.render_workers = max(1, render_workers)
         self.time_limit = max(0.0, float(time_limit))
         self.chunk = max(1, int(chunk))
-        self.probe = bool(probe)
+        if evidence_kind not in EDGE_KINDS:
+            raise ValueError(f"unknown evidence kind: {evidence_kind}")
+        if not supports(self.site_kind, evidence_kind):
+            raise ValueError(
+                f"{evidence_kind} is not evidence about a {self.site_kind}"
+            )
+        self.evidence_kind = evidence_kind
+        self.probe = (
+            evidence_kind in {"main", "contacts_domain"}
+            and supports(self.site_kind, "contacts_domain")
+        ) if probe is None else bool(probe)
         self.started = 0.0
         self.cmp = cmp or {}
         self.graph = SharingGraph()
@@ -298,6 +381,8 @@ class Expansion:
             return {
                 "origin": self.origin,
                 "hops": self.hops,
+                **profile(self.origin, self.target),
+                "target_id": self.target.id,
                 "graph": self.graph.to_dict(),
                 "progress": self.progress.to_dict(),
                 "unresolved": sorted(self.unresolved.values(), key=str.lower),
@@ -322,16 +407,21 @@ class Expansion:
     def _run(self) -> SharingGraph:
         self.started = time.monotonic()
         self._set(phase="fetching", hop=0, current=self.origin)
-        with deadline(self.origin_deadline):
-            fetch_origin(self.corpus, self.origin, force=self.force,
-                         delay=self.delay, render=self.render)
-        self._set(phase="analysing", crawled=1)
+        if self.evidence_kind != "contacts_domain":
+            with deadline(self.origin_deadline):
+                fetch_origin(self.corpus, self.origin, force=self.force,
+                             delay=self.delay, render=self.render,
+                             target=self.target)
+        self._set(phase="analysing", crawled=0 if self.evidence_kind == "contacts_domain" else 1)
         relations, observed = analyse_origin(
             self.corpus, self.origin, requests=self.requests,
             force=self.force, delay=self.delay, fetched=True, cmp=self.cmp,
-            probe=self.probe,
+            probe=self.probe, evidence_kind=self.evidence_kind,
+            target=self.target, site_kind=self.site_kind,
         )
-        seed_target = target_for_origin(self.origin)
+        if self.evidence_kind == "contacts_domain":
+            self._set(crawled=1)
+        seed_target = self.target
         with self._lock:
             seed_id = add_target(
                 self.graph, seed_target.id, seed_target.name, relations,
@@ -385,6 +475,8 @@ class Expansion:
                     expand_node(self.graph, party.node_id, relations,
                                 observed=observed, hop=hop,
                                 primary_domain=party.domain, expanded=analysed)
+                    if self.evidence_kind == "contacts_domain" and analysed:
+                        self.progress.crawled += 1
                     self.progress.parties_done += 1
                     self.progress.current = party.name
                 for onward in self._parties(party.node_id, hints):
@@ -413,7 +505,7 @@ class Expansion:
         """Yield ``(party, (relations, observed, analysed))`` for one batch."""
         def payload(p: _Party) -> tuple:
             return (str(self.corpus.root), f"https://{p.domain}", self.delay,
-                    self.probe)
+                    self.probe, self.evidence_kind)
 
         if self.analysis_workers <= 1 or len(parties) == 1:
             for party in parties:
@@ -434,10 +526,13 @@ class Expansion:
     def _analysis_pool(self) -> ProcessPoolExecutor:
         if self._pool is None:
             ctx = multiprocessing.get_context("spawn")
-            self._pool = ProcessPoolExecutor(
-                max_workers=self.analysis_workers, mp_context=ctx,
-                initializer=_init_analysis_worker,
-            )
+            kwargs = {
+                "max_workers": self.analysis_workers,
+                "mp_context": ctx,
+            }
+            if self.evidence_kind in {"main", "discloses_relation_with"}:
+                kwargs["initializer"] = _init_analysis_worker
+            self._pool = ProcessPoolExecutor(**kwargs)
         return self._pool
 
     def _fetch_party(self, party: _Party) -> bool:
@@ -445,6 +540,8 @@ class Expansion:
         if self.stopped:
             return False
         self._set(current=party.name)
+        if self.evidence_kind == "contacts_domain":
+            return True
         try:
             with deadline(self.party_deadline):
                 fetch_origin(self.corpus, f"https://{party.domain}",
@@ -457,7 +554,7 @@ class Expansion:
 
     def _render_ring(self, parties: list[_Party]) -> None:
         """Re-fetch the ring's client-rendered documents with a browser."""
-        if not self.render:
+        if not self.render or self.evidence_kind == "contacts_domain":
             return
         seen: set[str] = set()
         sites = [p for p in parties
