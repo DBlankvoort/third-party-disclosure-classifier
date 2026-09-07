@@ -90,7 +90,7 @@ class TestObservedConsent:
         states = {
             ev.consent
             for edge in graph.edges.values()
-            if edge.kind == EdgeKind.CONTACTS
+            if edge.kind == EdgeKind.CONTACTS_DOMAIN
             and edge.src == target_node_id("website__example")
             for ev in edge.evidence
         }

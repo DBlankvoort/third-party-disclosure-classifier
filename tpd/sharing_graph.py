@@ -33,10 +33,17 @@ class NodeType(str, Enum):
 
 
 class EdgeKind(str, Enum):
-    CONTACTS = "contacts"                              # Target  -> Domain
-    OWNED_BY = "owned_by"                              # Domain  -> Entity
-    DISCLOSES_SHARING_WITH = "discloses_sharing_with"  # Target  -> Entity
-    SUPPLIES = "supplies"                              # Entity  -> Target
+    DISCLOSES_RELATION_WITH = "discloses_relation_with"
+    LISTS_VENDOR = "lists_vendor"
+    AUTHORISES_INVENTORY_SALE = "authorises_inventory_sale"
+    CONTACTS_DOMAIN = "contacts_domain"
+    RESOLVES_TO = "resolves_to"
+
+    # Source compatibility for callers; persisted output uses the values above.
+    DISCLOSES_SHARING_WITH = DISCLOSES_RELATION_WITH
+    SUPPLIES = DISCLOSES_RELATION_WITH
+    CONTACTS = CONTACTS_DOMAIN
+    OWNED_BY = RESOLVES_TO
 
 
 class EvidenceSource(str, Enum):
@@ -189,6 +196,45 @@ class Evidence:
         return cls(**d)
 
 
+_LEGACY_EDGE_KINDS = {
+    "discloses_sharing_with", "supplies", "contacts", "owned_by",
+}
+
+
+def _kind_for_evidence(evidence_type: EvidenceType | None) -> EdgeKind:
+    if evidence_type is EvidenceType.ADS_TXT_AUTHORISATION:
+        return EdgeKind.AUTHORISES_INVENTORY_SALE
+    if evidence_type in {
+        EvidenceType.SELLERS_JSON_PARTICIPATION,
+        EvidenceType.TCF_VENDOR_REGISTRATION,
+        EvidenceType.CMP_VENDOR_LISTING,
+    }:
+        return EdgeKind.LISTS_VENDOR
+    if evidence_type in {
+        EvidenceType.NETWORK_CONTACT, EvidenceType.OBSERVED_TRANSMISSION,
+    }:
+        return EdgeKind.CONTACTS_DOMAIN
+    if evidence_type in {
+        EvidenceType.NAME_RESOLUTION, EvidenceType.DOMAIN_RESOLUTION,
+    }:
+        return EdgeKind.RESOLVES_TO
+    return EdgeKind.DISCLOSES_RELATION_WITH
+
+
+def _loaded_edge_kind(value: str, evidence: list[Evidence]) -> EdgeKind:
+    """Interpret an old persisted kind using its retained provenance."""
+    if value not in _LEGACY_EDGE_KINDS:
+        return EdgeKind(value)
+    if value == "contacts":
+        return EdgeKind.CONTACTS_DOMAIN
+    if value == "owned_by":
+        return EdgeKind.RESOLVES_TO
+    types = {e.evidence_type for e in evidence if e.evidence_type is not None}
+    if len(types) == 1:
+        return _kind_for_evidence(types.pop())
+    return EdgeKind.DISCLOSES_RELATION_WITH
+
+
 @dataclass
 class Edge:
     kind: EdgeKind
@@ -224,9 +270,10 @@ class Edge:
 
     @classmethod
     def from_dict(cls, d: dict) -> Edge:
+        evidence = [Evidence.from_dict(e) for e in d.get("evidence", [])]
         return cls(
-            kind=EdgeKind(d["kind"]), src=d["src"], dst=d["dst"],
-            evidence=[Evidence.from_dict(e) for e in d.get("evidence", [])],
+            kind=_loaded_edge_kind(d["kind"], evidence),
+            src=d["src"], dst=d["dst"], evidence=evidence,
         )
 
 
@@ -436,11 +483,15 @@ class SharingGraph:
         recipients: set[str] = set()
         suppliers: set[str] = set()
         for edge in self.edges.values():
-            if edge.kind is EdgeKind.DISCLOSES_SHARING_WITH:
+            if edge.kind in {
+                EdgeKind.DISCLOSES_RELATION_WITH,
+                EdgeKind.LISTS_VENDOR,
+                EdgeKind.AUTHORISES_INVENTORY_SALE,
+            }:
                 recipients.add(edge.dst)
-            elif edge.kind is EdgeKind.SUPPLIES:
-                suppliers.add(edge.src)
-            elif edge.kind is EdgeKind.OWNED_BY:
+                if edge.src.startswith("entity::"):
+                    suppliers.add(edge.src)
+            elif edge.kind is EdgeKind.RESOLVES_TO:
                 recipients.add(edge.dst)
         named = {nid for nid, n in self.nodes.items()
                  if n.type in (NodeType.ENTITY, NodeType.GENERIC)}
@@ -494,7 +545,21 @@ class SharingGraph:
             node = Node.from_dict(nd)
             g.nodes[node.id] = node
         for ed in d.get("edges", []):
-            g._index(Edge.from_dict(ed))
+            evidence = [Evidence.from_dict(e) for e in ed.get("evidence", [])]
+            if ed.get("kind") in {"discloses_sharing_with", "supplies"}:
+                grouped: dict[EdgeKind, list[Evidence]] = {}
+                for item in evidence:
+                    kind = _kind_for_evidence(item.evidence_type)
+                    grouped.setdefault(kind, []).append(item)
+                if not grouped:
+                    grouped[EdgeKind.DISCLOSES_RELATION_WITH] = []
+                for kind, records in grouped.items():
+                    held = g.add_edge(kind, ed["src"], ed["dst"])
+                    held.evidence.extend(records)
+            else:
+                edge = Edge.from_dict(ed)
+                held = g.add_edge(edge.kind, edge.src, edge.dst)
+                held.evidence.extend(edge.evidence)
         return g
 
     def save(self, path: str | Path, track: str | None = None) -> None:
@@ -606,7 +671,7 @@ def flow_hops(graph: SharingGraph, track: str | None = None) -> dict[str, list[C
     """Adjacency of party-to-party data flow"""
     owners: dict[str, str] = {}
     for edge in graph.edges.values():
-        if edge.kind is EdgeKind.OWNED_BY:
+        if edge.kind is EdgeKind.RESOLVES_TO:
             owners[edge.src] = edge.dst
 
     out: dict[str, list[ChainHop]] = {}
@@ -617,9 +682,13 @@ def flow_hops(graph: SharingGraph, track: str | None = None) -> dict[str, list[C
         ]
         if not positive:
             continue
-        if edge.kind in (EdgeKind.DISCLOSES_SHARING_WITH, EdgeKind.SUPPLIES):
+        if edge.kind in {
+            EdgeKind.DISCLOSES_RELATION_WITH,
+            EdgeKind.LISTS_VENDOR,
+            EdgeKind.AUTHORISES_INVENTORY_SALE,
+        }:
             src, dst, via = edge.src, edge.dst, ""
-        elif edge.kind is EdgeKind.CONTACTS:
+        elif edge.kind is EdgeKind.CONTACTS_DOMAIN:
             dst = owners.get(edge.dst, "")
             if not dst:
                 continue
@@ -824,10 +893,11 @@ def attach(
             confidence=float(rel.get("confidence") or 0.0),
             consent=rel.get("consent") or "",
         )
+        kind = _kind_for_evidence(ev.evidence_type)
         if rel.get("direction") == "upstream":
-            graph.add_edge(EdgeKind.SUPPLIES, nid, tid, ev)
+            graph.add_edge(kind, nid, tid, ev)
         else:
-            graph.add_edge(EdgeKind.DISCLOSES_SHARING_WITH, tid, nid, ev)
+            graph.add_edge(kind, tid, nid, ev)
 
     for obs in observed or ():
         entity = obs.get("entity") or ""
@@ -845,13 +915,13 @@ def attach(
                 owner_entity_id=eid, resolution_basis=obs.get("basis", ""),
                 hop_first_seen=hop + 1,
             ))
-            graph.add_edge(EdgeKind.CONTACTS, tid, did, Evidence(
+            graph.add_edge(EdgeKind.CONTACTS_DOMAIN, tid, did, Evidence(
                 source=EvidenceSource.TRAFFIC,
                 evidence_type=EvidenceType.NETWORK_CONTACT, hop=hop,
                 track="", subject=UNKNOWN,
                 consent=obs.get("consent") or "",
             ))
-            graph.add_edge(EdgeKind.OWNED_BY, did, eid, Evidence(
+            graph.add_edge(EdgeKind.RESOLVES_TO, did, eid, Evidence(
                 source=EvidenceSource.RESOLUTION,
                 evidence_type=EvidenceType.DOMAIN_RESOLUTION, hop=hop,
                 snippet=obs.get("basis", ""),

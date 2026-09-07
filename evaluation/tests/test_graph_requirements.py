@@ -114,13 +114,11 @@ class TestChainEnumeration:
         chains = sharing_chains(g, parties=2, limit=10)
         assert any(entity_node_id("Solo") in c.parties for c in chains)
 
-    def test_traffic_evidence_is_distinguished_from_a_written_disclosure(self):
+    def test_traffic_relation_records_do_not_create_candidate_data_paths(self):
         g = SharingGraph()
         add_target(g, "site", "site.example",
                    [_rel("Bravo", sources=["traffic"])])
-        (chain,) = sharing_chains(g, parties=2)
-        assert chain.traffic_only_hops == 1
-        assert not chain.fully_disclosed
+        assert sharing_chains(g, parties=2) == []
 
 
 class TestChainVerification:
@@ -153,13 +151,12 @@ class TestChainVerification:
         assert report.n_stale == 1
         assert report.n_reviewed == 0
 
-    def test_chains_resting_on_traffic_alone_are_counted_apart(self):
+    def test_traffic_alone_produces_no_chain_to_verify(self):
         g = SharingGraph()
         add_target(g, "site", "site.example", [_rel("Bravo", sources=["traffic"])])
         chains = sharing_chains(g, parties=2)
-        report = chain_verification(chains, {chains[0].id: True})
-        assert report.n_verified == 1
-        assert report.n_verified_fully_disclosed == 0
+        report = chain_verification(chains, {})
+        assert report.n_verified == 0
 
 
 class TestChainSheet:
@@ -347,6 +344,6 @@ class TestUnreachableExclusions:
         g = SharingGraph()
         g.add_node(Node(id="a", type=NodeType.ENTITY, display_name="A"))
         g.add_node(Node(id="b", type=NodeType.ENTITY, display_name="B"))
-        g.add_edge(EdgeKind.DISCLOSES_SHARING_WITH, "a", "b",
+        g.add_edge(EdgeKind.DISCLOSES_RELATION_WITH, "a", "b",
                    Evidence(source=EvidenceSource.POLICY, negative=True))
         assert not sharing_chains(g, parties=2)

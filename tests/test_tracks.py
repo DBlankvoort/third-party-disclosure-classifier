@@ -98,11 +98,17 @@ class TestGraphKeepsTracksApart:
         assert counts[INVENTORY] == 1
         assert counts[PERSONAL_DATA] == 1
 
-    def test_one_edge_may_hold_both_tracks_of_evidence(self):
+    def test_different_propositions_keep_their_evidence_separate(self):
         g = self._graph()
-        edge = g.edges[(EdgeKind.DISCLOSES_SHARING_WITH.value,
-                        "target::website__pub", entity_node_id("Exchange A"))]
-        assert edge.tracks == {INVENTORY, PERSONAL_DATA}
+        edges = [edge for edge in g.edges.values()
+                 if edge.dst == entity_node_id("Exchange A")]
+        assert {edge.kind for edge in edges} == {
+            EdgeKind.AUTHORISES_INVENTORY_SALE,
+            EdgeKind.DISCLOSES_RELATION_WITH,
+        }
+        assert {frozenset(edge.tracks) for edge in edges} == {
+            frozenset({INVENTORY}), frozenset({PERSONAL_DATA}),
+        }
 
     def test_a_subgraph_keeps_only_one_tracks_evidence(self):
         sub = self._graph().subgraph(INVENTORY)

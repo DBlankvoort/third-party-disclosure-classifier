@@ -30,7 +30,7 @@ class TestAddTarget:
     def test_relations_become_disclosure_edges(self):
         g = SharingGraph()
         tid = add_target(g, "website__example", "example.com", [_rel("criteo")])
-        edge = g.edges[(EdgeKind.DISCLOSES_SHARING_WITH.value, tid,
+        edge = g.edges[(EdgeKind.DISCLOSES_RELATION_WITH.value, tid,
                         entity_node_id("criteo"))]
         assert edge.sources == {"policy"}
 
@@ -39,25 +39,32 @@ class TestAddTarget:
         tid = add_target(g, "website__exchange", "exchange.com",
                          [_rel("Publisher A", direction="upstream",
                                sources=["sellers_json"])])
-        key = (EdgeKind.SUPPLIES.value, entity_node_id("Publisher A"), tid)
+        key = (EdgeKind.LISTS_VENDOR.value, entity_node_id("Publisher A"), tid)
         assert key in g.edges
         assert g.edges[key].sources == {"registry"}
 
     def test_specific_relation_provenance_survives_graph_construction(self):
         cases = {
-            "policy": EvidenceType.POLICY_RELATION,
-            "cookie_table": EvidenceType.STRUCTURED_TABLE_RELATION,
-            "vendor_table": EvidenceType.STRUCTURED_TABLE_RELATION,
-            "ads_txt": EvidenceType.ADS_TXT_AUTHORISATION,
-            "sellers_json": EvidenceType.SELLERS_JSON_PARTICIPATION,
-            "tcf_gvl": EvidenceType.TCF_VENDOR_REGISTRATION,
-            "cmp": EvidenceType.CMP_VENDOR_LISTING,
+            "policy": (EvidenceType.POLICY_RELATION,
+                       EdgeKind.DISCLOSES_RELATION_WITH),
+            "cookie_table": (EvidenceType.STRUCTURED_TABLE_RELATION,
+                             EdgeKind.DISCLOSES_RELATION_WITH),
+            "vendor_table": (EvidenceType.STRUCTURED_TABLE_RELATION,
+                             EdgeKind.DISCLOSES_RELATION_WITH),
+            "ads_txt": (EvidenceType.ADS_TXT_AUTHORISATION,
+                        EdgeKind.AUTHORISES_INVENTORY_SALE),
+            "sellers_json": (EvidenceType.SELLERS_JSON_PARTICIPATION,
+                             EdgeKind.LISTS_VENDOR),
+            "tcf_gvl": (EvidenceType.TCF_VENDOR_REGISTRATION,
+                        EdgeKind.LISTS_VENDOR),
+            "cmp": (EvidenceType.CMP_VENDOR_LISTING, EdgeKind.LISTS_VENDOR),
         }
-        for index, (source, expected) in enumerate(cases.items()):
+        for index, (source, (evidence_type, edge_kind)) in enumerate(cases.items()):
             g = SharingGraph()
             add_target(g, str(index), str(index), [_rel("Criteo", sources=[source])])
             edge = next(iter(g.edges.values()))
-            assert edge.evidence[0].evidence_type is expected
+            assert edge.evidence[0].evidence_type is evidence_type
+            assert edge.kind is edge_kind
 
     def test_first_party_relations_are_skipped(self):
         g = SharingGraph()
@@ -77,8 +84,8 @@ class TestAddTarget:
             {"entity": "Google", "basis": "domain_map",
              "domains": ["doubleclick.net"], "types": ["script"], "requests": 2},
         ])
-        assert (EdgeKind.CONTACTS.value, tid, "domain::doubleclick.net") in g.edges
-        assert (EdgeKind.OWNED_BY.value, "domain::doubleclick.net",
+        assert (EdgeKind.CONTACTS_DOMAIN.value, tid, "domain::doubleclick.net") in g.edges
+        assert (EdgeKind.RESOLVES_TO.value, "domain::doubleclick.net",
                 entity_node_id("Google")) in g.edges
 
     def test_network_contacts_do_not_become_personal_data_relations(self):
@@ -88,10 +95,10 @@ class TestAddTarget:
              "domains": ["doubleclick.net"], "types": ["script"], "requests": 2},
         ])
         assert not any(
-            edge.kind is EdgeKind.DISCLOSES_SHARING_WITH
+            edge.kind is EdgeKind.DISCLOSES_RELATION_WITH
             for edge in g.out_edges(tid)
         )
-        edge = g.edges[(EdgeKind.CONTACTS.value, tid, "domain::doubleclick.net")]
+        edge = g.edges[(EdgeKind.CONTACTS_DOMAIN.value, tid, "domain::doubleclick.net")]
         assert edge.evidence[0].evidence_type is EvidenceType.NETWORK_CONTACT
         assert edge.evidence[0].data_type == ""
         assert edge.evidence[0].purposes == []
@@ -109,7 +116,7 @@ class TestTraversal:
         add_target(g, "a", "a", [_rel("Bravo")])
         # Bravo, analysed in its own right, shares onward with Charlie.
         g.add_node(Node(id="target::b", type=NodeType.TARGET, expanded=True))
-        g.add_edge(EdgeKind.DISCLOSES_SHARING_WITH, entity_node_id("Bravo"),
+        g.add_edge(EdgeKind.DISCLOSES_RELATION_WITH, entity_node_id("Bravo"),
                    entity_node_id("Charlie"))
         return g
 
@@ -162,6 +169,39 @@ class TestSerialisation:
         assert edge.evidence[0].source is EvidenceSource.POLICY
         assert edge.evidence[0].evidence_type is EvidenceType.POLICY_RELATION
         assert edge.evidence[0].snippet == "we share with Criteo"
+
+    def test_legacy_mixed_edge_is_split_by_evidence_type(self):
+        old = {
+            "nodes": [],
+            "edges": [{
+                "kind": "discloses_sharing_with", "src": "target::a",
+                "dst": "entity::b", "evidence": [
+                    {"source": "policy", "evidence_type": "policy_relation"},
+                    {"source": "registry", "evidence_type": "ads_txt_authorisation"},
+                    {"source": "registry", "evidence_type": "cmp_vendor_listing"},
+                ],
+            }],
+        }
+        graph = SharingGraph.from_dict(old)
+        assert set(kind for kind, _src, _dst in graph.edges) == {
+            EdgeKind.DISCLOSES_RELATION_WITH.value,
+            EdgeKind.AUTHORISES_INVENTORY_SALE.value,
+            EdgeKind.LISTS_VENDOR.value,
+        }
+        assert sum(len(edge.evidence) for edge in graph.edges.values()) == 3
+
+    def test_legacy_contact_and_resolution_kinds_load_with_new_names(self):
+        old = {"nodes": [], "edges": [
+            {"kind": "contacts", "src": "target::a", "dst": "domain::b"},
+            {"kind": "owned_by", "src": "domain::b", "dst": "entity::b"},
+        ]}
+        graph = SharingGraph.from_dict(old)
+        assert set(kind for kind, _src, _dst in graph.edges) == {
+            EdgeKind.CONTACTS_DOMAIN.value, EdgeKind.RESOLVES_TO.value,
+        }
+        assert {edge["kind"] for edge in graph.to_dict()["edges"]} == {
+            "contacts_domain", "resolves_to",
+        }
 
 
 class TestNameResolutionInTheGraph:
@@ -218,7 +258,7 @@ class TestCorrections:
         assert g.merge_nodes(telaria, criteo)
         assert telaria not in g.nodes
         assert not g.out_edges(telaria) and not g.in_edges(telaria)
-        edge = g.edges[(EdgeKind.DISCLOSES_SHARING_WITH.value,
+        edge = g.edges[(EdgeKind.DISCLOSES_RELATION_WITH.value,
                         target_node_id("website__pub"), criteo)]
         assert len(edge.evidence) == 2
 
@@ -232,8 +272,8 @@ class TestCorrections:
     def test_an_arrangement_can_be_removed_on_its_own(self):
         g = self._graph()
         tid, nid = target_node_id("website__pub"), entity_node_id("Criteo")
-        assert g.remove_edge(EdgeKind.DISCLOSES_SHARING_WITH.value, tid, nid)
-        assert (EdgeKind.DISCLOSES_SHARING_WITH.value, tid, nid) not in g.edges
+        assert g.remove_edge(EdgeKind.DISCLOSES_RELATION_WITH.value, tid, nid)
+        assert (EdgeKind.DISCLOSES_RELATION_WITH.value, tid, nid) not in g.edges
         assert nid in g.nodes
 
     def test_an_arrangement_can_be_moved_to_the_other_track(self):
@@ -241,7 +281,7 @@ class TestCorrections:
 
         g = self._graph()
         tid, nid = target_node_id("website__pub"), entity_node_id("Criteo")
-        assert g.set_edge_track(EdgeKind.DISCLOSES_SHARING_WITH.value, tid, nid,
+        assert g.set_edge_track(EdgeKind.DISCLOSES_RELATION_WITH.value, tid, nid,
                                 INVENTORY)
         assert g.edge_counts()[INVENTORY] == 1
 

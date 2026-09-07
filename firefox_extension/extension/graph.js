@@ -17,10 +17,11 @@ const SOURCE_COLOR = {
   resolution: "#5b6478",
 };
 const KIND_LABEL = {
-  discloses_sharing_with: "discloses sharing with",
-  supplies: "supplies data to",
-  contacts: "contacts",
-  owned_by: "operated by",
+  discloses_relation_with: "discloses a relation with",
+  lists_vendor: "lists as a vendor",
+  authorises_inventory_sale: "authorises inventory sale by",
+  contacts_domain: "contacts domain",
+  resolves_to: "resolves to",
 };
 const TERMINATION_LABEL = {
   internal: "shares onward",
@@ -1010,7 +1011,8 @@ function renderStats(snapshot) {
   for (const e of state.graph.edges) {
     if (!edgePasses(e)) continue;
     if (!state.visible.has(e.src) || !state.visible.has(e.dst)) continue;
-    if (e.kind === "discloses_sharing_with" || e.kind === "owned_by") {
+    if (["discloses_relation_with", "lists_vendor",
+      "authorises_inventory_sale", "resolves_to"].includes(e.kind)) {
       recipients.add(e.dst);
     }
   }
@@ -1019,7 +1021,7 @@ function renderStats(snapshot) {
     return n && n.type !== "domain" && n.type !== "target";
   };
   const arrangements = state.graph.edges.filter(
-    (e) => edgePasses(e) && e.kind !== "owned_by"
+    (e) => edgePasses(e) && e.kind !== "resolves_to"
       && state.visible.has(e.src) && state.visible.has(e.dst),
   ).length;
   $("stat-recipients").textContent = [...recipients].filter(named).length;

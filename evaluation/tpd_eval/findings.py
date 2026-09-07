@@ -67,7 +67,7 @@ def graph_measures(graph: SharingGraph) -> dict:
         for nid in origins:
             named = set()
             for edge in graph.out_edges(nid):
-                if edge.kind is not EdgeKind.DISCLOSES_SHARING_WITH:
+                if edge.kind is not EdgeKind.DISCLOSES_RELATION_WITH:
                     continue
                 dst = graph.nodes.get(edge.dst)
                 if dst is not None and dst.type is NodeType.ENTITY:
@@ -215,7 +215,7 @@ def corroboration(graph: SharingGraph, track: str = PERSONAL_DATA) -> dict:
     """Entity-destination edges supported by more than one source family."""
     total = corroborated = 0
     for edge in graph.edges.values():
-        if edge.kind is not EdgeKind.DISCLOSES_SHARING_WITH:
+        if edge.kind is not EdgeKind.DISCLOSES_RELATION_WITH:
             continue
         dst = graph.nodes.get(edge.dst)
         if dst is None or dst.type is not NodeType.ENTITY:

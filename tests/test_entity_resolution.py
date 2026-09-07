@@ -201,6 +201,6 @@ class TestServiceCanonicalisation:
         add_target(g, "site", "site.example",
                    [rel("Google Analytics"), rel("Google Ads")])
         edge = next(e for e in g.edges.values()
-                    if e.kind is EdgeKind.DISCLOSES_SHARING_WITH)
+                    if e.kind is EdgeKind.DISCLOSES_RELATION_WITH)
         purposes = {p for ev in edge.evidence for p in ev.purposes}
         assert purposes == {"analytics", "advertising"}
