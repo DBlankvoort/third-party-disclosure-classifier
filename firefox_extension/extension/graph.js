@@ -18,12 +18,7 @@ const KIND_COLOR = {
   resolves_to: "#8c928e",
   declares_supply_chain: "#b04f66",
 };
-const CORROBORABLE_KINDS = new Map([
-  ["authorises_inventory_sale", {
-    type: "sellers_json_confirmation",
-    label: "Only sales the sellers.json confirms",
-  }],
-]);
+const CORROBORABLE_KINDS = new Map();
 const KIND_LABEL = {
   discloses_relation_with: "discloses a relation with",
   lists_vendor: "lists as a vendor",
@@ -38,7 +33,6 @@ const VIEW_QUESTION = {
   contacts_domain: "Which third-party domains received browser requests?",
   traffic_policy: "What do contacted parties say they may do with customer data?",
   discloses_relation_with: "Which recipients does this organisation say may receive personal data?",
-  authorises_inventory_sale: "Who is authorised to sell this organisation's ad inventory?",
   schain: "Which supply paths were declared in observed programmatic transactions?",
 };
 const TERMINATION_LABEL = {
@@ -1538,7 +1532,9 @@ function selectKind(kind) {
 // publisher names the registry rather than the publisher.
 function applyProfile(profile) {
   state.siteKind = profile.site_kind || "website";
-  const views = profile.graph_views || [];
+  const available = new Set(
+    [...$("kind-nav").querySelectorAll("button")].map((button) => button.dataset.kind));
+  const views = (profile.graph_views || []).filter((view) => available.has(view));
   if (!views.length) return;
   for (const button of $("kind-nav").querySelectorAll("button")) {
     button.hidden = !views.includes(button.dataset.kind);

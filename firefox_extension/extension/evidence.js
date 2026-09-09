@@ -155,6 +155,9 @@ function renderSources(documents) {
 function render(data) {
   applyViews(data);
   const meta = META[kind]; document.documentElement.style.setProperty("--active", meta.colour);
+  // Inventory authorisations are seed-relative and single-hop. Their evidence
+  // cards show more than a network rendering would, so do not offer that graph.
+  $("open-graph").hidden = kind === "authorises_inventory_sale";
   $("title").textContent = meta.title; document.title = `${meta.title} — Disclosure Lens`;
   // An app is named by its own identifier: the store's host is not the target.
   $("origin").textContent = (data.target_name
