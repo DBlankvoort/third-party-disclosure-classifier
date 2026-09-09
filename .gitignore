@@ -2,7 +2,8 @@
 /out
 /project_goals
 /evaluation/corpus
-/evaluation/labels
+/evaluation/labels/*
+!/evaluation/labels/README.md
 /evaluation/out
 _cache_corpus/
 

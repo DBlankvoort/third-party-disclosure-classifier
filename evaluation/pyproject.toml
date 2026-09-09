@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tpd-eval"
-version = "1.0.0"
-description = "Evaluation suite for project."
+version = "2.0.0"
+description = "Evidence-correctness evaluation for third-party disclosures."
 readme = "README.md"
 license = "GPL-3.0-or-later"
 authors = [{ name = "Dick Blankvoort", email = "dahblankvoort@gmail.com" }]
@@ -26,9 +26,6 @@ tpd-eval = "tpd_eval.cli:cli"
 
 [tool.setuptools.packages.find]
 include = ["tpd_eval*"]
-
-[tool.setuptools.package-data]
-"tpd_eval.annotate" = ["static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

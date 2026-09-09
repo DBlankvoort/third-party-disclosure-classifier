@@ -1,0 +1,30 @@
+{
+  "schema_version": "2.0",
+  "corpus_snapshot_id": "REPLACE_WITH_CONTENT_ADDRESSED_SNAPSHOT",
+  "annotation_version": "draft-1",
+  "created_at": "2026-09-09T00:00:00Z",
+  "random_seed": 20260909,
+  "configuration": {"extractor": "REPLACE", "models": {}, "cache_versions": {}},
+  "browser": {"name": "firefox", "version": "REPLACE", "locale": "REPLACE"},
+  "collection": {"complete": false, "timeout": false, "limitations": ["template only"]},
+  "targets": [
+    {
+      "target_id": "development-example",
+      "split": "development",
+      "selected_by": "stratified protocol; replace with sampling-frame row",
+      "collected_at": "2026-09-09T00:00:00Z",
+      "target_type": "website",
+      "sector": "example",
+      "geography": "unspecified",
+      "language": "unspecified",
+      "template_group": "example-template",
+      "corporate_family": "example-family",
+      "near_duplicate_group": "example-content"
+      ,"documents": [
+        {"document_id": "privacy-policy", "document_sha256": "REPLACE",
+         "passage_sha256": "REPLACE", "extraction_input_sha256": "REPLACE",
+         "extraction_version": "REPLACE", "collected_at": "2026-09-09T00:00:00Z"}
+      ]
+    }
+  ]
+}

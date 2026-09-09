@@ -33,13 +33,13 @@ We also take heavy inspiration from:
 - [The Usable Privacy Project](https://usableprivacy.org/data/)
 - [Before & After: The Effect of EU's 2022 Code of Practice on Disinformation](https://arxiv.org/abs/2410.11369)
 
-Lastly, we evaluate our framework using data from:
+The sampling frames include data from:
 - [The dataset from "Honesty is the Best Policy"](https://huggingface.co/datasets/masoodali/apple-app-store-labels-policies) for samples of Apple App Store apps.
 - [IAB Europe's Vendors list](https://iabeurope.eu/tcf-for-vendors/) for samples of data brokers.
 - [The MAPS Policies Dataset](https://usableprivacy.org/data/) for samples of Google Play Store apps.
 - [The Princeton-Leuven Longitudinal Corpus Crawler](https://privacypolicies.cs.princeton.edu/) for samples of websites.
 
-Additionally, we make use of Claude Code in the design and implementation of this project.
+Additionally, we make use of Claude Code and Codex in the design and implementation of this project.
 
 ## Installation
 
@@ -73,9 +73,15 @@ Navigate to the root directory, then
 to start the server. Afterwards, navigate to `about:debugging` -> 'This Firefox' -> 'Load Temporary Add-on' -> Select `firefox_extension/extension/manifest.json` to load the extension for the session.
 
 ### `tpd` package
-Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for arguments. 4
+Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for arguments.
+
 ### `tpd-eval` package
-Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
+
+```sh
+tpd-eval validate --manifest evaluation/schemas/manifest-v2.example.json
+tpd-eval annotation-sheet --candidates candidates.jsonl --out annotations.jsonl
+tpd-eval score --manifest manifest.json --annotations held-out-test.jsonl --out report.md
+```
 
 ## Repository layout
 
@@ -109,12 +115,13 @@ Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
 
 | Path | Contents |
 | --- | --- |
-| `evaluation/tpd_eval/labeling.py` | Labelling sheets and gold-label loading |
-| `evaluation/tpd_eval/metrics.py` | Agreement, coverage, identification, chain, and latency metrics |
-| `evaluation/tpd_eval/findings.py` | Measurements behind the findings page |
-| `evaluation/tpd_eval/annotate/` | Manual gold-labelling interface |
+| `evaluation/tpd_eval/schema.py` | Versioned evidence records and stable identifiers |
+| `evaluation/tpd_eval/splits.py` | Target/template/family/near-duplicate leakage checks |
+| `evaluation/tpd_eval/metrics.py` | Conventional claim, resolution, traffic, chain, and agreement metrics |
+| `evaluation/tpd_eval/report.py` | Provenance-first Markdown and JSON reporting |
+| `evaluation/schemas/` | Versioned annotation schema and manifest template |
 | `evaluation/data_sources/` | Seed lists the study corpora were sampled from |
-| `evaluation/labels/` | Hand-assigned gold labels per corpus |
+| `evaluation/labels/` | Explicitly contaminated legacy/development-only labels |
 | `evaluation/corpus/` | Collected document sets (untracked) |
 | `evaluation/tests/` | Pytest suite for the harness |
 

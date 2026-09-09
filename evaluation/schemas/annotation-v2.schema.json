@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "annotation-v2.schema.json",
+  "title": "TPD evidence annotation item v2",
+  "type": "object",
+  "required": ["schema_version", "item_id", "task", "split", "source", "prediction", "annotations"],
+  "properties": {
+    "schema_version": {"const": "2.0"},
+    "item_id": {"type": "string"},
+    "task": {"enum": ["document", "claim", "entity", "traffic", "chain", "communication"]},
+    "split": {"enum": ["development", "validation", "test", "challenge"]},
+    "source": {"type": "object"},
+    "prediction": {"type": "object"},
+    "annotations": {
+      "type": "object",
+      "required": ["annotator_1", "annotator_2", "adjudicated"],
+      "properties": {
+        "annotator_1": {"$ref": "#/$defs/annotation"},
+        "annotator_2": {"$ref": "#/$defs/annotation"},
+        "adjudicated": {"$ref": "#/$defs/annotation"}
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "properties": {"available": {"type": "boolean"}, "complete": {"type": "boolean"}, "timeout": {"type": "boolean"}}
+    }
+  },
+  "$defs": {
+    "annotation": {
+      "type": ["object", "null"],
+      "properties": {
+        "verdict": {"enum": ["yes", "no", "ambiguous", "insufficient_evidence", "not_applicable"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "notes": {"type": "string"},
+        "values": {"type": "object"}
+      }
+    }
+  },
+  "additionalProperties": true
+}
