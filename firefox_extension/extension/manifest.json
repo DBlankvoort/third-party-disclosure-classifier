@@ -18,6 +18,7 @@
   "background": {
     "scripts": ["background.js"]
   },
+  "web_accessible_resources": ["prebid-page.js"],
   "browser_action": {
     "default_title": "Analyze third-party disclosures",
     "default_popup": "popup.html",

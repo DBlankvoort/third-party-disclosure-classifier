@@ -16,15 +16,12 @@ const KIND_COLOR = {
   authorises_inventory_sale: "#996f28",
   contacts_domain: "#27786d",
   resolves_to: "#8c928e",
+  declares_supply_chain: "#b04f66",
 };
 const CORROBORABLE_KINDS = new Map([
   ["authorises_inventory_sale", {
     type: "sellers_json_confirmation",
     label: "Only sales the sellers.json confirms",
-  }],
-  ["contacts_domain", {
-    type: "tracker_list_confirmation",
-    label: "Only domains a tracker list knows",
   }],
 ]);
 const KIND_LABEL = {
@@ -33,6 +30,16 @@ const KIND_LABEL = {
   authorises_inventory_sale: "authorises inventory sale by",
   contacts_domain: "contacts domain",
   resolves_to: "resolves to",
+  declares_supply_chain: "declares next supply-chain participant",
+};
+const VIEW_QUESTION = {
+  lower_bound: "What browser-visible personal-data transfers almost certainly occurred?",
+  possibility: "What transfers do the collected vectors indicate may be contemplated?",
+  contacts_domain: "Which third-party domains received browser requests?",
+  traffic_policy: "To whom might contacted third parties disclose received data?",
+  discloses_relation_with: "Which recipients does this organisation say may receive personal data?",
+  authorises_inventory_sale: "Who is authorised to sell this organisation's ad inventory?",
+  schain: "Which supply paths were declared in observed programmatic transactions?",
 };
 const TERMINATION_LABEL = {
   internal: "shares onward",
@@ -66,9 +73,10 @@ const RECONCILE_LABEL = {
   unknown_domain: "no site known for one of the two parties",
   no_seller_id: "ads.txt provides no seller account to match",
   relationship_mismatch: "seller account exists, but its role conflicts with ads.txt",
+  seller_identity_mismatch: "DIRECT account names a different publisher domain",
 };
 const RECONCILE_ORDER = [
-  "confirmed", "relationship_mismatch", "absent", "no_seller_id", "confidential_only", "no_sellers_json",
+  "confirmed", "relationship_mismatch", "seller_identity_mismatch", "absent", "no_seller_id", "confidential_only", "no_sellers_json",
   "not_collected", "unknown_domain",
 ];
 
@@ -115,7 +123,7 @@ const state = {
   render: null,
   grid: null,
   gridCell: HIT_CELL,
-  kind: "main",
+  kind: "lower_bound",
   siteKind: "website",
   showAllLabels: false,
   filters: {
@@ -144,6 +152,10 @@ function indexGraph(graph) {
 
 function edgeEvidence(edge) {
   return edge.evidence || [];
+}
+
+function hasPositiveEvidence(edge) {
+  return edgeEvidence(edge).some((ev) => !ev.negative);
 }
 
 function edgeSources(edge) {
@@ -212,11 +224,29 @@ function edgeSubjects(edge) {
 
 function edgeInView(edge) {
   if (!edgeEvidence(edge).length) return false;
-  if (state.kind === "main") return mainEvidenceEdge(edge);
-  if (state.kind === "contacts_domain") {
+  if (state.kind === "lower_bound" || state.kind === "contacts_domain") {
     return edge.kind === "contacts_domain" || edge.kind === "resolves_to";
   }
-  return edge.kind === state.kind;
+  if (state.kind === "possibility") {
+    const source = state.byId.get(edge.src);
+    const onward = edgeEvidence(edge).some((ev) => !ev.negative
+      && ["service_data", "unknown", ""].includes(ev.subject || ""));
+    if (edge.kind === "discloses_relation_with" && source
+        && source.hop_first_seen > 0) return onward;
+    return edge.kind === "resolves_to" || hasPositiveEvidence(edge);
+  }
+  if (state.kind === "traffic_policy") {
+    const dst = state.byId.get(edge.dst);
+    const onward = edgeEvidence(edge).some((ev) => !ev.negative
+      && ["service_data", "unknown", ""].includes(ev.subject || ""));
+    return edge.kind === "resolves_to"
+      || (edge.kind === "contacts_domain" && dst && dst.hop_first_seen === 1)
+      || (edge.kind === "discloses_relation_with" && onward
+        && dst && dst.hop_first_seen > 1);
+  }
+  if (state.kind === "schain") return edge.kind === "declares_supply_chain";
+  if (state.kind === "main") return mainEvidenceEdge(edge);
+  return edge.kind === state.kind && hasPositiveEvidence(edge);
 }
 
 function edgePasses(edge) {
@@ -232,7 +262,8 @@ function edgePasses(edge) {
 function nodePasses(node) {
   if (node.type === "generic" && !state.filters.generic) return false;
   if (node.type === "domain" && (!state.filters.domains
-      || !["main", "contacts_domain"].includes(state.kind))) return false;
+      || !["main", "lower_bound", "possibility", "contacts_domain",
+        "traffic_policy", "schain"].includes(state.kind))) return false;
   if (node.type === "entity" && node.grounded === false
       && !state.filters.ungrounded) return false;
   return true;
@@ -1115,6 +1146,7 @@ function renderLegend() {
     [KIND_COLOR.lists_vendor, "vendor listing", "", "lists_vendor"],
     [KIND_COLOR.authorises_inventory_sale, "sale authorisation", "", "authorises_inventory_sale"],
     [KIND_COLOR.contacts_domain, "observed contact", "", "contacts_domain"],
+    [KIND_COLOR.declares_supply_chain, "declared supply-chain hop", "", "schain"],
     ["", "not analysed", "ring", null],
   ].filter(([, , , kind]) => kind === null || kinds.has(kind));
   for (const [colour, text, cls] of rows) {
@@ -1145,7 +1177,8 @@ function renderStats(snapshot) {
   const named = (id) => {
     const n = state.byId.get(id);
     if (!n || n.type === "target") return false;
-    return state.kind === "contacts_domain" ? n.type === "domain" : n.type !== "domain";
+    return ["lower_bound", "contacts_domain", "schain"].includes(state.kind)
+      ? n.type === "domain" : n.type !== "domain";
   };
   const arrangements = state.graph.edges.filter(
     (e) => edgePasses(e) && e.kind !== "resolves_to"
@@ -1154,6 +1187,10 @@ function renderStats(snapshot) {
   $("stat-recipients").textContent = [...recipients].filter(named).length;
   $("stat-edges").textContent = arrangements;
   const labels = {
+    lower_bound: "almost-certain transfers",
+    possibility: "possible transfers",
+    traffic_policy: "policy-projected relations",
+    schain: "declared supply-chain hops",
     main: "typed propositions shown",
     discloses_relation_with: "disclosed relations",
     lists_vendor: "vendor listings",
@@ -1161,7 +1198,7 @@ function renderStats(snapshot) {
     contacts_domain: "observed contacts",
   };
   $("stat-edges-label").textContent = labels[state.kind];
-  $("stat-parties-label").textContent = state.kind === "contacts_domain"
+  $("stat-parties-label").textContent = ["lower_bound", "contacts_domain", "schain"].includes(state.kind)
     ? "domains shown" : "organisations shown";
   $("stat-crawled").textContent = (snapshot && snapshot.progress.crawled) || 0;
   renderVerification(snapshot);
@@ -1231,7 +1268,8 @@ function setProgress(snapshot) {
   const box = $("progress");
   if (!snapshot) { box.hidden = true; return; }
   const p = snapshot.progress;
-  box.hidden = !state.running && p.phase === "done" && !p.error;
+  const finished = !snapshot.running;
+  box.hidden = finished && p.phase === "done" && !p.error;
   const done = p.parties_total ? `${p.parties_done}/${p.parties_total} parties` : "";
   const clock = p.time_limit
     ? ` · ${clockLabel(p.elapsed)} of ${clockLabel(p.time_limit)}`
@@ -1243,7 +1281,9 @@ function setProgress(snapshot) {
   $("progress-text").textContent = text;
   // A walk given a clock is measured by it; the ring it is on says little
   // about how much of the ecosystem is left.
-  const frac = p.time_limit
+  const frac = finished && p.phase === "done" && !p.error
+    ? 1
+    : p.time_limit
     ? p.elapsed / p.time_limit
     : (p.parties_total
       ? (p.hop - 1 + p.parties_done / p.parties_total) / Math.max(1, p.hops)
@@ -1251,15 +1291,20 @@ function setProgress(snapshot) {
   $("progress-bar").style.width = `${Math.round(Math.min(1, frac) * 100)}%`;
 }
 
-async function observedRequests() {
-  if (state.tabId == null) return [];
+async function observedCapture() {
+  if (state.tabId == null) return {requests: [], schains: []};
   try {
+    await browser.tabs.executeScript(state.tabId, {file: "prebid.js"});
+    await new Promise((resolve) => setTimeout(resolve, 250));
     const res = await browser.runtime.sendMessage({
       kind: "getRequests", tabId: state.tabId,
     });
-    return (res && res.requests) || [];
+    return {
+      requests: (res && res.requests) || [],
+      schains: (res && res.schains) || [],
+    };
   } catch (e) {
-    return [];
+    return {requests: [], schains: []};
   }
 }
 
@@ -1278,7 +1323,8 @@ async function capturedCmp() {
 }
 
 async function start() {
-  const requests = await observedRequests();
+  const capture = await observedCapture();
+  const requests = capture.requests;
   const cmp = await capturedCmp();
   let data;
   try {
@@ -1290,6 +1336,7 @@ async function start() {
         time_limit: state.timeLimit * 60,
         requests,
         cmp,
+        schains: capture.schains,
         evidence_kind: state.kind,
         corroborated_only: state.kind === "main",
       }),
@@ -1334,7 +1381,6 @@ async function poll(first) {
     if (err instanceof TypeError) $("offline").hidden = false;
     return;
   }
-  applySnapshot(snapshot, first);
   if (!snapshot.running) {
     clearInterval(state.polling);
     state.polling = null;
@@ -1342,6 +1388,7 @@ async function poll(first) {
     $("run").hidden = false;
     $("stop").hidden = true;
   }
+  applySnapshot(snapshot, first);
 }
 
 function applySnapshot(snapshot, refit) {
@@ -1358,7 +1405,7 @@ function renderEmptyState() {
   const shown = state.graph.edges.some(edgePasses);
   const withheld = collected && !shown && corroborationApplies()
     && state.filters.corroborated && state.graph.edges.some(edgeInView);
-  box.hidden = collected && (shown || !withheld);
+  box.hidden = collected && shown;
   if (box.hidden) return;
   box.innerHTML = "";
   const head = document.createElement("strong");
@@ -1369,8 +1416,12 @@ function renderEmptyState() {
       + "sellers.json names the party that supplies it. Untick the filter to "
       + "see the claims that stand on one side only.";
   } else {
-    head.textContent = "No evidence network collected yet";
-    note.textContent = "Choose a depth and collect evidence from this source.";
+    head.textContent = state.kind === "schain"
+      ? "No browser-visible supply chain captured"
+      : "No evidence network collected yet";
+    note.textContent = state.kind === "schain"
+      ? "No OpenRTB SupplyChain object was found in request bodies or Prebid events. Server-side bidding is not observable here."
+      : "Choose a depth and collect evidence from this source.";
   }
   box.append(head, note);
 }
@@ -1473,6 +1524,9 @@ function selectKind(kind) {
   }
   $("run").textContent = kind === "main"
     ? "Collect all evidence" : `Collect ${label}`;
+  const question = VIEW_QUESTION[kind] || "What evidence does this graph show?";
+  $("question").textContent = question;
+  $("view-question").textContent = question;
   const rule = CORROBORABLE_KINDS.get(kind);
   $("f-corroborated-box").hidden = !rule;
   if (rule) $("f-corroborated-label").textContent = rule.label;
@@ -1517,9 +1571,9 @@ $("stop").addEventListener("click", stop);
   state.origin = params.get("url") || "";
   const tab = params.get("tab");
   state.tabId = tab === null ? null : Number(tab);
-  state.kind = params.get("kind") || "main";
-  if (!Object.keys(KIND_COLOR).includes(state.kind) && state.kind !== "main") {
-    state.kind = "main";
+  state.kind = params.get("kind") || "lower_bound";
+  if (!Object.hasOwn(VIEW_QUESTION, state.kind)) {
+    state.kind = "lower_bound";
   }
   selectKind(state.kind);
   $("origin").textContent = state.origin || "no URL supplied";

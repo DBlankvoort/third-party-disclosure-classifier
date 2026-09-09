@@ -3,7 +3,7 @@
 <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><link rel="stylesheet" href="graph.css" /><title>Evidence network</title></head>
 <body>
   <header>
-    <div class="brand"><span class="network-mark">⌘</span><div><h1>Evidence network</h1><p><span id="origin">—</span> <span id="site-kind" class="kind-chip" hidden>—</span> · graph crawl session</p></div></div>
+    <div class="brand"><span class="network-mark">⌘</span><div><h1>Evidence network</h1><p><span id="origin">—</span> <span id="site-kind" class="kind-chip" hidden>—</span> · <span id="question">graph crawl session</span></p></div></div>
     <div class="controls">
       <input id="search" type="search" placeholder="Find an organisation" />
       <label>Depth <input id="hops" type="number" min="1" value="1" /></label>
@@ -14,11 +14,18 @@
     </div>
   </header>
   <nav id="kind-nav" aria-label="Proposition views">
-    <button data-kind="main">Main findings</button>
+    <button data-kind="lower_bound">Conservative transfers</button>
+    <button data-kind="possibility">Possibility envelope</button>
+    <button data-kind="contacts_domain">Observed traffic</button>
+    <button data-kind="traffic_policy">Policy-projected sharing</button>
     <button data-kind="discloses_relation_with">Prose disclosures</button>
     <button data-kind="authorises_inventory_sale">Ad-tech authorisations</button>
-    <button data-kind="contacts_domain">Web traffic</button>
+    <button data-kind="schain">Observed supply paths</button>
   </nav>
+  <section class="view-description" aria-live="polite" aria-atomic="true">
+    <strong>Question answered</strong>
+    <span id="view-question">Select a graph view to see the question it answers.</span>
+  </section>
   <div id="progress" class="progress" hidden><span class="spinner"></span><p id="progress-text">Starting…</p><div class="bar"><i id="progress-bar"></i></div></div>
   <main>
     <section class="stage">

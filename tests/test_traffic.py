@@ -93,3 +93,11 @@ class TestObservedHosts:
         assert contact["domain"] == "unmapped-example.test"
         assert contact["entity"] == ""
         assert contact["basis"] == "domain"
+
+    def test_redirect_destinations_are_retained(self):
+        requests = [{
+            "url": "https://doubleclick.net/sync", "type": "xmlhttprequest",
+            "redirected": True, "redirectUrl": "https://criteo.com/match",
+        }]
+        (contact,) = observed_contacts(requests, self.ORIGIN)
+        assert contact["redirect_targets"] == ["criteo.com"]

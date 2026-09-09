@@ -17,6 +17,7 @@ from tpd.reconcile import (
     NO_SELLERS_JSON,
     NOT_COLLECTED,
     RELATIONSHIP_MISMATCH,
+    SELLER_IDENTITY_MISMATCH,
     UNLISTED,
     RegistryStore,
     ads_txt_accounts,
@@ -207,10 +208,10 @@ class TestReconciliation:
             (EdgeKind.AUTHORISES_INVENTORY_SALE.value, seed, "entity::ssp")]
         assert len(edge.evidence) == 1
 
-    def test_exact_seller_id_does_not_depend_on_a_domain_fallback(self, corpus):
+    def test_direct_account_must_name_the_same_publisher_domain(self, corpus):
         graph, seed, ssp = _pair_graph()
         report = reconcile_sellers(graph, corpus, domains={seed: "unknown.example"})
-        assert report[0]["status"] == CONFIRMED
+        assert report[0]["status"] == SELLER_IDENTITY_MISMATCH
         assert report[0]["basis"] == BY_SELLER_ID
 
     def test_a_receiving_party_with_no_sellers_json_is_told_apart_from_one_uncollected(

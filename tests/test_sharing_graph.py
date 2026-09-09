@@ -10,6 +10,7 @@ from tpd.sharing_graph import (
     NodeType,
     SharingGraph,
     add_target,
+    attach_schains,
     entity_node_id,
     target_node_id,
 )
@@ -88,7 +89,7 @@ class TestAddTarget:
         assert (EdgeKind.RESOLVES_TO.value, "domain::doubleclick.net",
                 entity_node_id("Google")) in g.edges
 
-    def test_network_contacts_do_not_become_personal_data_relations(self):
+    def test_network_contacts_record_unavoidable_connection_metadata(self):
         g = SharingGraph()
         tid = add_target(g, "t", "t", [], observed=[
             {"entity": "Google", "basis": "domain_map",
@@ -100,9 +101,25 @@ class TestAddTarget:
         )
         edge = g.edges[(EdgeKind.CONTACTS_DOMAIN.value, tid, "domain::doubleclick.net")]
         assert edge.evidence[0].evidence_type is EvidenceType.NETWORK_CONTACT
-        assert edge.evidence[0].data_type == ""
+        assert edge.evidence[0].data_type == "IP address and connection metadata"
         assert edge.evidence[0].purposes == []
-        assert edge.evidence[0].track == ""
+        assert edge.evidence[0].track == "personal_data"
+
+    def test_supply_chain_nodes_keep_order_and_transaction_context(self):
+        g = SharingGraph()
+        tid = add_target(g, "t", "site.example", [])
+        attach_schains(g, tid, [{
+            "complete": 1, "request_id": "auction-1", "nodes": [
+                {"asi": "ssp.example", "sid": "pub-1"},
+                {"asi": "exchange.example", "sid": "ssp-2"},
+            ],
+        }])
+        first = g.edges[(EdgeKind.DECLARES_SUPPLY_CHAIN.value, tid,
+                         "domain::ssp.example")]
+        second = g.edges[(EdgeKind.DECLARES_SUPPLY_CHAIN.value,
+                          "domain::ssp.example", "domain::exchange.example")]
+        assert first.evidence[0].transaction_id == "auction-1"
+        assert second.evidence[0].chain_complete is True
 
     def test_unattributed_contact_keeps_the_domain_without_a_resolution_edge(self):
         g = SharingGraph()

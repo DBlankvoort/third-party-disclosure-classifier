@@ -120,6 +120,10 @@ def kind_for(origin: str, target: Target | None = None, docs=None) -> str:
 # View policy
 # --------------------------------------------------------------------------- #
 MAIN_VIEW = "main"
+LOWER_BOUND_VIEW = "lower_bound"
+POSSIBILITY_VIEW = "possibility"
+TRAFFIC_POLICY_VIEW = "traffic_policy"
+SCHAIN_VIEW = "schain"
 PROSE_VIEW = "discloses_relation_with"
 VENDOR_VIEW = "lists_vendor"
 ADTECH_VIEW = "authorises_inventory_sale"
@@ -144,16 +148,23 @@ def views_for(kind: str) -> list[str]:
 
 
 def graph_views_for(kind: str) -> list[str]:
-    views = [view for view in views_for(kind) if view != VENDOR_VIEW]
-    return views if len(views) < 2 else [MAIN_VIEW, *views]
+    if kind in _APP_KINDS:
+        return [PROSE_VIEW]
+    return [
+        LOWER_BOUND_VIEW, POSSIBILITY_VIEW, TRAFFIC_VIEW,
+        TRAFFIC_POLICY_VIEW, PROSE_VIEW, ADTECH_VIEW, SCHAIN_VIEW,
+    ]
 
 
 def default_view_for(kind: str) -> str:
-    return PROSE_VIEW if kind in _APP_KINDS else MAIN_VIEW
+    return PROSE_VIEW if kind in _APP_KINDS else LOWER_BOUND_VIEW
 
 
 def supports(kind: str, view: str) -> bool:
-    return view == MAIN_VIEW or view in _VIEWS.get(
+    if view in {MAIN_VIEW, LOWER_BOUND_VIEW, POSSIBILITY_VIEW,
+                TRAFFIC_POLICY_VIEW, SCHAIN_VIEW}:
+        return kind not in _APP_KINDS
+    return view in _VIEWS.get(
         kind, _VIEWS[TargetType.WEBSITE.value])
 
 

@@ -92,11 +92,24 @@ def observed_contacts(
             "types": set(),
             "consent_states": set(),
             "requests": 0,
+            "initiators": set(),
+            "redirects": 0,
+            "redirect_targets": set(),
         })
         rec["types"].add((req or {}).get("type") or "other")
         rec["consent_states"].add((req or {}).get("consent") or "")
         rec["requests"] += 1
+        initiator = (req or {}).get("originUrl") or (req or {}).get("documentUrl") or ""
+        if initiator:
+            rec["initiators"].add(initiator)
+        rec["redirects"] += int(bool((req or {}).get("redirected")))
+        redirect_host = urlparse((req or {}).get("redirectUrl") or "").hostname or ""
+        redirect_reg = registrable_domain(redirect_host)
+        if redirect_reg and redirect_reg != reg:
+            rec["redirect_targets"].add(redirect_reg)
     out = [{**rec, "types": sorted(rec["types"]),
+            "initiators": sorted(rec["initiators"]),
+            "redirect_targets": sorted(rec["redirect_targets"]),
             "consent_states": sorted(rec["consent_states"]),
             "consent": consent_state(rec["consent_states"])}
            for rec in by_domain.values()]

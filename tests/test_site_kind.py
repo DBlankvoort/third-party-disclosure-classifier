@@ -11,7 +11,6 @@ from tpd.site_kind import (
     kind_for,
     profile,
     store_app_ref,
-    store_target,
     supports,
     views_for,
 )
@@ -91,10 +90,11 @@ class TestViewPolicy:
         assert graph_views_for(kind) == ["discloses_relation_with"]
 
     def test_a_site_with_several_views_keeps_the_combined_one(self):
-        assert graph_views_for(TargetType.WEBSITE.value)[0] == "main"
+        assert graph_views_for(TargetType.WEBSITE.value)[0] == "lower_bound"
 
-    def test_the_combined_view_is_always_supported(self):
-        assert supports(TargetType.PLAY_STORE_APP.value, "main")
+    def test_derived_views_are_for_websites(self):
+        assert supports(TargetType.WEBSITE.value, "possibility")
+        assert not supports(TargetType.PLAY_STORE_APP.value, "possibility")
 
     def test_a_profile_reports_why_a_site_reads_as_vendor_side(self):
         assert profile("https://www.criteo.com")["site_kind_signals"]

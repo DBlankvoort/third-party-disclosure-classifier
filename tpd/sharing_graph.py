@@ -38,6 +38,7 @@ class EdgeKind(str, Enum):
     AUTHORISES_INVENTORY_SALE = "authorises_inventory_sale"
     CONTACTS_DOMAIN = "contacts_domain"
     RESOLVES_TO = "resolves_to"
+    DECLARES_SUPPLY_CHAIN = "declares_supply_chain"
 
     # Source compatibility for callers; persisted output uses the values above.
     DISCLOSES_SHARING_WITH = DISCLOSES_RELATION_WITH
@@ -67,6 +68,7 @@ class EvidenceType(str, Enum):
     NAME_RESOLUTION = "name_resolution"
     DOMAIN_RESOLUTION = "domain_resolution"
     MANUAL_CORRECTION = "manual_correction"
+    OPENRTB_SUPPLY_CHAIN = "openrtb_supply_chain"
 
 
 GENERIC_PREFIX = "generic::"
@@ -189,6 +191,8 @@ class Evidence:
     # How a corroborating record matched and whether its role is consistent.
     match_basis: str = ""
     relationship_valid: bool | None = None
+    transaction_id: str = ""
+    chain_complete: bool | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -938,7 +942,10 @@ def attach(
             graph.add_edge(EdgeKind.CONTACTS_DOMAIN, tid, did, Evidence(
                 source=EvidenceSource.TRAFFIC,
                 evidence_type=EvidenceType.NETWORK_CONTACT, hop=hop,
-                track="", subject=UNKNOWN,
+                snippet=(f"{obs.get('requests', 0)} request(s); "
+                         f"types={','.join(obs.get('types') or ())}"),
+                data_type="IP address and connection metadata",
+                track=PERSONAL_DATA, subject="site_visitor",
                 consent=obs.get("consent") or "",
             ))
             if eid:
@@ -948,3 +955,51 @@ def attach(
                     snippet=obs.get("basis", ""),
                     track="", subject=UNKNOWN,
                 ))
+
+    for obs in observed or ():
+        source = domain_node_id(obs.get("domain") or "")
+        if source not in graph.nodes:
+            continue
+        for target in obs.get("redirect_targets") or ():
+            destination = domain_node_id(target)
+            graph.add_node(Node(
+                id=destination, type=NodeType.DOMAIN, display_name=target,
+                hop_first_seen=hop + 2,
+            ))
+            graph.add_edge(EdgeKind.CONTACTS_DOMAIN, source, destination, Evidence(
+                source=EvidenceSource.TRAFFIC,
+                evidence_type=EvidenceType.OBSERVED_TRANSMISSION, hop=hop + 1,
+                snippet="observed HTTP redirect",
+                data_type="IP address and connection metadata",
+                track=PERSONAL_DATA, subject="site_visitor",
+                consent=obs.get("consent") or "",
+            ))
+
+
+def attach_schains(graph: SharingGraph, src_id: str, chains, hop: int = 0) -> None:
+    """Add ordered participants declared by captured OpenRTB supply chains."""
+    for chain in chains or ():
+        previous = src_id
+        transaction = str(chain.get("request_id") or chain.get("transaction_id") or "")
+        complete = chain.get("complete")
+        for index, item in enumerate(chain.get("nodes") or ()):
+            domain = str(item.get("asi") or item.get("domain") or "").lower()
+            sid = str(item.get("sid") or "")
+            if not domain or not sid:
+                continue
+            nid = domain_node_id(domain)
+            graph.add_node(Node(
+                id=nid, type=NodeType.DOMAIN, display_name=domain,
+                hop_first_seen=hop + index + 1,
+            ))
+            graph.add_edge(EdgeKind.DECLARES_SUPPLY_CHAIN, previous, nid, Evidence(
+                source=EvidenceSource.TRAFFIC,
+                evidence_type=EvidenceType.OPENRTB_SUPPLY_CHAIN,
+                hop=hop + index,
+                snippet=(f"{domain} seller_id={sid}; "
+                         f"captured via {chain.get('source') or 'unknown'}"),
+                track="inventory", subject=UNKNOWN,
+                publisher_ids=[sid], transaction_id=transaction,
+                chain_complete=bool(complete) if complete is not None else None,
+            ))
+            previous = nid

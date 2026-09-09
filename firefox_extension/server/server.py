@@ -55,7 +55,8 @@ def _entity_overrides() -> dict:
 def start_expansion(url: str, hops: int, requests: list, force: bool,
                     cmp: dict | None = None, time_limit: float = 0.0,
                     evidence_kind: str = "main",
-                    corroborated_only: bool = False) -> str:
+                    corroborated_only: bool = False,
+                    schains: list | None = None) -> str:
     from tpd.expand import Expansion
 
     expansion = Expansion(
@@ -64,6 +65,7 @@ def start_expansion(url: str, hops: int, requests: list, force: bool,
         time_limit=time_limit, evidence_kind=evidence_kind,
         probe=None if CONFIG["probe"] else False,
         lookups=CONFIG["corroborate"], corroborated_only=corroborated_only,
+        schains=schains,
     )
     job_id = uuid.uuid4().hex[:12]
 
@@ -240,7 +242,8 @@ class Handler(BaseHTTPRequestHandler):
                                          time_limit=time_limit,
                                          evidence_kind=payload.get("evidence_kind") or "main",
                                          corroborated_only=bool(
-                                             payload.get("corroborated_only")))
+                                             payload.get("corroborated_only")),
+                                         schains=payload.get("schains") or [])
             except ValueError as exc:
                 self._json(400, {"error": str(exc)})
                 return

@@ -109,7 +109,7 @@ function applyViews(data) {
 }
 
 function openWorkspace(view) {
-  const kind = VIEW_KIND[view] || "main";
+  const kind = VIEW_KIND[view] || "lower_bound";
   const page = view === "main" ? "graph.html" : "evidence.html";
   browser.tabs.create({
     url: browser.runtime.getURL(page)

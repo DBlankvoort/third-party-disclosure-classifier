@@ -34,17 +34,21 @@ from .reconcile import (
     RegistryStore,
     confirm_tracker_domains,
     reconcile_sellers,
+    reconcile_supply_chains,
     reconciliation_summary,
     tracker_summary,
 )
 from .sharing_graph import (
+    EdgeKind,
     NodeType,
     SharingGraph,
     add_target,
+    attach_schains,
     expand_node,
     target_node_id,
 )
 from .site_kind import kind_for, profile, store_target, supports
+from .tracks import carries_upstream_data
 from .traffic import observed_contacts
 from .typology import TargetType
 
@@ -60,7 +64,8 @@ INVENTORY_KINDS = frozenset({"main", "authorises_inventory_sale"})
 
 RECONCILE_DEADLINE = 45.0
 
-TRAFFIC_KINDS = frozenset({"main", "contacts_domain"})
+TRAFFIC_KINDS = frozenset({"main", "possibility", "traffic_policy",
+                           "contacts_domain", "lower_bound"})
 
 ORIGIN_DEADLINE = 120.0
 PARTY_DEADLINE = 45.0
@@ -121,6 +126,7 @@ def probed_requests(corpus: Corpus, target: Target, origin: str,
 EDGE_KINDS = {
     "main", "discloses_relation_with", "lists_vendor",
     "authorises_inventory_sale", "contacts_domain",
+    "lower_bound", "possibility", "traffic_policy", "schain",
 }
 
 
@@ -133,7 +139,8 @@ def relations_for_target(
     """Every sharing relation one target's document set supports."""
     site_kind = site_kind or target_type
     lists = []
-    if evidence_kind in {"main", "discloses_relation_with"}:
+    if evidence_kind in {"main", "possibility", "traffic_policy",
+                         "discloses_relation_with"}:
         lists.extend([
             structured_relations_for_target(
                 corpus, docs, first_party=first_party, registry_kinds=frozenset(),
@@ -141,7 +148,8 @@ def relations_for_target(
             named_org_relations(corpus, docs, target_type=target_type,
                                 first_party=first_party),
         ])
-    if evidence_kind in {"main", "discloses_relation_with"} and poligraph_available():
+    if evidence_kind in {"main", "possibility", "traffic_policy",
+                         "discloses_relation_with"} and poligraph_available():
         lists.append(target_relations(corpus, target_id, docs, first_party=first_party))
     if evidence_kind == "lists_vendor" and supports(site_kind, "lists_vendor"):
         lists.append(structured_relations_for_target(
@@ -172,7 +180,7 @@ def analyse_origin(
 ) -> tuple[list[dict], list[dict]]:
     """Collect ``origin`` if needed and return its ``(relations, observed)``."""
     target = target or target_for_origin(origin)
-    if evidence_kind == "contacts_domain":
+    if evidence_kind in {"contacts_domain", "lower_bound", "schain"}:
         if probe:
             requests = merge_requests(
                 requests, probed_requests(corpus, target, origin, force=force))
@@ -193,7 +201,8 @@ def analyse_origin(
                              target_type=target.type, evidence_kind=evidence_kind,
                              site_kind=kind),
         cmp_relations(cmp, first_party=first_party)
-        if evidence_kind == "lists_vendor" and supports(kind, "lists_vendor")
+        if (evidence_kind == "possibility"
+            or (evidence_kind == "lists_vendor" and supports(kind, "lists_vendor")))
         else [],
     ])
     observed = (observed_contacts(requests, origin, first_party=first_party)
@@ -320,6 +329,7 @@ class Expansion:
         evidence_kind: str = "main",
         lookups: int = 0,
         corroborated_only: bool = False,
+        schains=None,
     ) -> None:
         self.corpus = Corpus(corpus_root)
         self.seed_url = seed_url
@@ -347,11 +357,13 @@ class Expansion:
             )
         self.evidence_kind = evidence_kind
         self.probe = (
-            evidence_kind in {"main", "contacts_domain"}
+            evidence_kind in {"main", "lower_bound", "possibility",
+                              "traffic_policy", "contacts_domain"}
             and supports(self.site_kind, "contacts_domain")
         ) if probe is None else bool(probe)
         self.started = 0.0
         self.cmp = cmp or {}
+        self.schains = list(schains or ())
         self._reconciled: dict[tuple, dict] = {}
         self._tracked: dict[tuple, dict] = {}
         self.dropped: list[dict] = []
@@ -432,7 +444,7 @@ class Expansion:
 
     def _run(self) -> SharingGraph:
         self.started = time.monotonic()
-        self._set(phase="fetching", hop=0, current=self.origin)
+        self._set(phase="fetching", hop=1, current=self.origin)
         if self.evidence_kind != "contacts_domain":
             with deadline(self.origin_deadline):
                 fetch_origin(self.corpus, self.origin, force=self.force,
@@ -453,16 +465,24 @@ class Expansion:
                 self.graph, seed_target.id, seed_target.name, relations,
                 target_type=seed_target.type, observed=observed, hop=0,
             )
+            if self.evidence_kind == "schain":
+                attach_schains(self.graph, seed_id, self.schains)
         hints = observed_domain_hints(observed)
         self._verify(hop=1)
 
         expanded: set[str] = {seed_id}
         frontier = self._parties(seed_id, hints)
+        # An ad system's own ads.txt concerns its inventory, not onward sale of
+        # the seed publisher's inventory. Keep this view to the seed's records.
+        if self.evidence_kind in {
+            "authorises_inventory_sale", "contacts_domain", "lower_bound", "schain",
+        }:
+            frontier = []
         for hop in range(1, self.hops):
             if self.stopped or not frontier:
                 break
             frontier = self._ranked(frontier)
-            self._set(hop=hop, parties_total=len(frontier), parties_done=0)
+            self._set(hop=hop + 1, parties_total=len(frontier), parties_done=0)
             frontier = self._expand_hop(frontier, hop, expanded, hints)
             self._verify(hop=hop + 1)
             frontier = [p for p in frontier if p.node_id in self.graph.nodes]
@@ -474,7 +494,10 @@ class Expansion:
             phase = "timed out"
         elif self.stopped:
             phase = "stopped"
-        self._set(phase=phase, current="", elapsed=self.elapsed)
+        completed = {"hop": self.hops,
+                     "parties_done": self.progress.parties_total} \
+            if phase == "done" else {}
+        self._set(phase=phase, current="", elapsed=self.elapsed, **completed)
         return self.graph
 
     # -- cross-checks --------------------------------------------------- #
@@ -484,6 +507,8 @@ class Expansion:
             self._confirm_trackers()
         if self.evidence_kind in INVENTORY_KINDS:
             self._reconcile()
+        if self.evidence_kind == "schain" and not self._reconciled:
+            self._reconcile_schains()
         if self.corroborated_only and hop is not None:
             with self._lock:
                 self.dropped.extend(prune_to_corroborated(self.graph, hop))
@@ -530,6 +555,24 @@ class Expansion:
         except Exception as exc:  # noqa: BLE001
             self._set(error=self.progress.error or f"reconcile: {exc}")
 
+    def _reconcile_schains(self) -> None:
+        """Validate captured supply-chain accounts against sellers.json."""
+        self._set(phase="verifying", current="")
+        if self._store is None:
+            self._store = RegistryStore(self.corpus)
+        seed_host = urlparse(self.origin).netloc.removeprefix("www.")
+        try:
+            report = reconcile_supply_chains(
+                self.graph, self.corpus,
+                domains={target_node_id(self.target.id): seed_host},
+                store=self._store, lookups=self.lookups,
+            )
+            with self._lock:
+                for row in report:
+                    self._reconciled[(row["kind"], row["src"], row["dst"])] = row
+        except Exception as exc:  # noqa: BLE001
+            self._set(error=self.progress.error or f"schain: {exc}")
+
     def _expand_hop(
         self, parties: list[_Party], hop: int, expanded: set[str],
         hints: dict[str, str],
@@ -543,7 +586,9 @@ class Expansion:
             batch = parties[start:start + self.chunk]
             self._set(phase="fetching")
             with ThreadPoolExecutor(max_workers=self.workers) as pool:
-                reached = [p for p, ok in zip(batch, pool.map(self._fetch_party, batch))
+                reached = [p for p, ok in zip(
+                    batch, pool.map(self._fetch_party, batch), strict=True,
+                )
                            if ok]
             if self.stopped:
                 break
@@ -589,7 +634,7 @@ class Expansion:
         """Yield ``(party, (relations, observed, analysed))`` for one batch."""
         def payload(p: _Party) -> tuple:
             return (str(self.corpus.root), f"https://{p.domain}", self.delay,
-                    self.probe, self.evidence_kind)
+                    False, self.evidence_kind)
 
         if self.analysis_workers <= 1 or len(parties) == 1:
             for party in parties:
@@ -669,6 +714,24 @@ class Expansion:
         with self._lock:
             reached: dict[str, object] = {}
             for edge in self.graph.out_edges(node_id):
+                source = self.graph.nodes.get(node_id)
+                if self.evidence_kind == "traffic_policy":
+                    at_seed = source is not None and source.hop_first_seen == 0
+                    if at_seed and edge.kind is not EdgeKind.CONTACTS_DOMAIN:
+                        continue
+                if (self.evidence_kind == "possibility" and source is not None
+                        and source.hop_first_seen > 0
+                        and edge.kind is EdgeKind.DISCLOSES_RELATION_WITH
+                        and not any(not ev.negative and carries_upstream_data(ev.subject)
+                                    for ev in edge.evidence)):
+                    continue
+                    if not at_seed and edge.kind is not EdgeKind.DISCLOSES_RELATION_WITH:
+                        continue
+                    if not at_seed and not any(
+                        not ev.negative and carries_upstream_data(ev.subject)
+                        for ev in edge.evidence
+                    ):
+                        continue
                 node = self.graph.nodes.get(edge.dst)
                 if node is None:
                     continue

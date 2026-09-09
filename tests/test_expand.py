@@ -245,7 +245,14 @@ class TestProgress:
         snapshot = walk.snapshot()
         assert snapshot["origin"] == "https://seed.example"
         assert snapshot["progress"]["phase"] == "done"
+        assert snapshot["progress"]["hop"] == 1
         assert len(snapshot["graph"]["nodes"]) == 2
+
+    def test_completed_walk_reports_the_requested_depth(self, tmp_path, recorded):
+        recorded["relations"]["https://seed.example"] = []
+        walk = _walk(tmp_path, 4)
+        walk.run()
+        assert walk.snapshot()["progress"]["hop"] == 4
 
     def test_a_stopped_walk_expands_nothing_further(self, tmp_path, recorded):
         recorded["relations"]["https://seed.example"] = [_rel("Criteo")]
@@ -279,7 +286,7 @@ class TestProgress:
         walk.run()
         assert walk.graph.termination(entity_node_id("Criteo")) == "terminal"
 
-    def test_traffic_walk_probes_without_collecting_documents(
+    def test_traffic_view_does_not_visit_contacted_domains(
         self, tmp_path, monkeypatch,
     ):
         def no_fetch(*args, **kwargs):
@@ -295,13 +302,29 @@ class TestProgress:
         walk = _walk(tmp_path, 2, evidence_kind="contacts_domain")
         walk.run()
         assert entity_node_id("Google") in walk.graph.nodes
-        assert entity_node_id("Criteo") in walk.graph.nodes
+        assert entity_node_id("Criteo") not in walk.graph.nodes
 
 
 class TestEvidenceKind:
     def test_unknown_kind_is_rejected(self, tmp_path):
         with pytest.raises(ValueError, match="unknown evidence kind"):
             _walk(tmp_path, 1, evidence_kind="unsupported")
+
+    def test_adtech_view_does_not_reinterpret_ad_system_ads_txt(
+        self, tmp_path, recorded,
+    ):
+        recorded["relations"]["https://seed.example"] = [
+            _rel("ssp.example", sources=["ads_txt"], qualifier="direct",
+                 publisher_ids=["pub-1"]),
+        ]
+        recorded["relations"]["https://ssp.example"] = [
+            _rel("other.example", sources=["ads_txt"], qualifier="direct",
+                 publisher_ids=["other-1"]),
+        ]
+        walk = _walk(tmp_path, 4, evidence_kind="authorises_inventory_sale",
+                     probe=False)
+        walk.run()
+        assert recorded["fetched"] == ["https://seed.example"]
 
 
 class TestFirstParty:

@@ -27,6 +27,7 @@ NOT_COLLECTED = "not_collected"
 UNKNOWN_DOMAIN = "unknown_domain"
 NO_SELLER_ID = "no_seller_id"
 RELATIONSHIP_MISMATCH = "relationship_mismatch"
+SELLER_IDENTITY_MISMATCH = "seller_identity_mismatch"
 
 # Seller-entry match methods.
 BY_SELLER_ID = "seller_id"
@@ -300,6 +301,16 @@ def _relationship_matches(qualifier: str, seller_type: str) -> bool:
     return seller_type.lower() in expected.get(qualifier.lower(), set())
 
 
+def _seller_identity_matches(qualifier: str, source_domain: str,
+                             entry: SellerEntry) -> bool:
+    """DIRECT accounts must identify the publisher that wrote ads.txt."""
+    if qualifier.lower() != "direct":
+        return True
+    expected = registrable_domain(source_domain)
+    actual = registrable_domain(entry.domain)
+    return bool(expected and actual and expected == actual)
+
+
 def reconcile_sellers(
     graph: SharingGraph,
     corpus: Corpus | str | Path,
@@ -351,9 +362,11 @@ def reconcile_sellers(
             continue
         matches = [(record.by_id[sid], qualifier)
                    for sid, qualifier in authorizations if sid in record.by_id]
-        valid = [(entry, qualifier) for entry, qualifier in matches
-                 if _relationship_matches(qualifier, entry.seller_type)]
-        entry, qualifier = (valid or matches or [(None, "")])[0]
+        role_valid = [(entry, qualifier) for entry, qualifier in matches
+                      if _relationship_matches(qualifier, entry.seller_type)]
+        valid = [(entry, qualifier) for entry, qualifier in role_valid
+                 if _seller_identity_matches(qualifier, src_domain, entry)]
+        entry, qualifier = (valid or role_valid or matches or [(None, "")])[0]
         basis = BY_SELLER_ID if entry is not None else ""
         if entry is None:
             row["status"] = (CONFIDENTIAL_ONLY
@@ -362,15 +375,23 @@ def reconcile_sellers(
             report.append(row)
             continue
         relationship_valid = _relationship_matches(qualifier, entry.seller_type)
+        identity_valid = _seller_identity_matches(qualifier, src_domain, entry)
+        if not relationship_valid:
+            status = RELATIONSHIP_MISMATCH
+        elif not identity_valid:
+            status = SELLER_IDENTITY_MISMATCH
+        else:
+            status = CONFIRMED
         row.update({
-            "status": CONFIRMED if relationship_valid else RELATIONSHIP_MISMATCH,
+            "status": status,
             "basis": basis, "seller_id": entry.seller_id,
             "seller_type": entry.seller_type, "seller_name": entry.name,
             "qualifier": qualifier,
             "relationship_valid": relationship_valid,
+            "identity_valid": identity_valid,
         })
         report.append(row)
-        if not relationship_valid:
+        if status != CONFIRMED:
             continue
         edge.evidence.append(Evidence(
             source=EvidenceSource.REGISTRY,
@@ -387,6 +408,67 @@ def reconcile_sellers(
             match_basis=basis,
             relationship_valid=True,
         ))
+    return report
+
+
+def reconcile_supply_chains(
+    graph: SharingGraph,
+    corpus: Corpus | str | Path,
+    domains: dict[str, str] | None = None,
+    store: RegistryStore | None = None,
+    lookups: int = 0,
+) -> list[dict]:
+    """Validate captured SupplyChain nodes against each system's sellers.json."""
+    if not isinstance(corpus, Corpus):
+        corpus = Corpus(corpus)
+    store = store or RegistryStore(corpus)
+    edges = [edge for edge in graph.edges.values()
+             if edge.kind is EdgeKind.DECLARES_SUPPLY_CHAIN
+             and not any(item.evidence_type is EvidenceType.SELLERS_JSON_CONFIRMATION
+                         for item in edge.evidence)]
+    wanted = []
+    for edge in edges:
+        domain = node_domain(graph, edge.dst, domains)
+        if domain and domain not in wanted and store.sellers(domain) is None:
+            wanted.append(domain)
+    if wanted:
+        _fetch_sellers(store, corpus, wanted[:max(0, lookups)])
+    report = []
+    for edge in edges:
+        destination = node_domain(graph, edge.dst, domains)
+        source = node_domain(graph, edge.src, domains)
+        evidence = next((item for item in edge.evidence
+                         if item.evidence_type is EvidenceType.OPENRTB_SUPPLY_CHAIN), None)
+        sid = evidence.publisher_ids[0] if evidence and evidence.publisher_ids else ""
+        row = {"kind": edge.kind.value, "src": edge.src, "dst": edge.dst,
+               "src_domain": source, "dst_domain": destination,
+               "seller_id": sid, "status": NOT_COLLECTED, "basis": ""}
+        record = store.sellers(destination) if destination else None
+        if record is None:
+            row["status"] = NO_SELLERS_JSON if destination in wanted else NOT_COLLECTED
+        elif not sid:
+            row["status"] = NO_SELLER_ID
+        elif sid not in record.by_id:
+            row["status"] = ABSENT
+        else:
+            entry = record.by_id[sid]
+            expected = registrable_domain(source)
+            actual = registrable_domain(entry.domain)
+            row["status"] = CONFIRMED if expected and expected == actual \
+                else SELLER_IDENTITY_MISMATCH
+            row["basis"] = BY_SELLER_ID
+            row["seller_name"] = entry.name
+            row["seller_type"] = entry.seller_type
+            if row["status"] == CONFIRMED:
+                edge.evidence.append(Evidence(
+                    source=EvidenceSource.REGISTRY,
+                    evidence_type=EvidenceType.SELLERS_JSON_CONFIRMATION,
+                    snippet=f"{destination} sellers.json identifies {source} as {sid}",
+                    track=INVENTORY, subject=NOT_APPLICABLE,
+                    publisher_ids=[sid], match_basis=BY_SELLER_ID,
+                    relationship_valid=True,
+                ))
+        report.append(row)
     return report
 
 
@@ -487,22 +569,35 @@ def corroborate_relations(
             continue
         matches = [(record.by_id[sid], qualifier)
                    for sid, qualifier in authorizations if sid in record.by_id]
-        valid_matches = [
+        role_valid = [
             pair for pair in matches
             if _relationship_matches(pair[1], pair[0].seller_type)
         ]
-        entry, qualifier = (valid_matches or matches or [(None, "")])[0]
+        valid_matches = [
+            pair for pair in role_valid
+            if _seller_identity_matches(pair[1], site_domain, pair[0])
+        ]
+        entry, qualifier = (valid_matches or role_valid or matches or [(None, "")])[0]
         basis = BY_SELLER_ID if entry is not None else ""
         if entry is None:
             row["corroboration"] = (CONFIDENTIAL_ONLY
                                     if not record.disclosed and record.confidential
                                     else ABSENT)
         else:
-            valid = _relationship_matches(qualifier, entry.seller_type)
-            row["corroboration"] = CONFIRMED if valid else RELATIONSHIP_MISMATCH
+            role_matches = _relationship_matches(qualifier, entry.seller_type)
+            identity_matches = _seller_identity_matches(
+                qualifier, site_domain, entry)
+            if not role_matches:
+                status = RELATIONSHIP_MISMATCH
+            elif not identity_matches:
+                status = SELLER_IDENTITY_MISMATCH
+            else:
+                status = CONFIRMED
+            row["corroboration"] = status
             row["corroboration_basis"] = basis
             row["corroborated_by"] = domain
-            row["relationship_valid"] = valid
+            row["relationship_valid"] = role_matches
+            row["identity_valid"] = identity_matches
             if entry.seller_id:
                 row["seller_id"] = entry.seller_id
             if entry.seller_type:
