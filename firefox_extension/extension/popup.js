@@ -151,7 +151,8 @@ function render(data) {
     ? data.target_name : data.origin.replace(/^https?:\/\//, "");
   $("site-kind").textContent = kind.label;
   $("site-kind").hidden = false;
-  $("observed-at").textContent = new Date().toLocaleDateString("en-GB", {
+  const observedAt = Number(((data.coverage || {}).probe_observed_at) || 0);
+  $("observed-at").textContent = (observedAt ? new Date(observedAt * 1000) : new Date()).toLocaleDateString("en-GB", {
     day: "numeric", month: "short", year: "numeric",
   });
 
@@ -164,6 +165,11 @@ function render(data) {
   $("vendor-count").textContent = vendors;
   $("adtech-count").textContent = adtech;
   $("traffic-count").textContent = domains.size;
+  const coverage = data.coverage || {};
+  const limitations = coverage.probe_limitations || [];
+  $("coverage-note").textContent = limitations.length
+    ? `Coverage: ${limitations.join("; ")}. Counts are observations, not totals.`
+    : "Counts reflect collected evidence and are not ecosystem totals.";
 
   const proseRoles = roles(data.documents, new Set([
     "privacy_policy", "cookie_policy", "dpa", "subprocessor_list", "partners_page",

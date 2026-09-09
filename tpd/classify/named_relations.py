@@ -15,7 +15,7 @@ NARRATIVE_ROLES = {
     "subprocessor_list", "partners_page",
 }
 
-_DATA_TYPE = "personal data"
+_DATA_TYPE = "unspecified data"
 _ACTION = "be_shared"
 _RECEIVED = "be_received_from"
 
@@ -56,8 +56,7 @@ def named_org_relations(
 ) -> list[dict]:
     """Relations for the organisations one target's documents name."""
     ner_fn, _ = load_ner(enable=use_ner)
-    out: dict[str, dict] = {}
-    downstream_keys: set[str] = set()
+    out: dict[tuple[str, str, str, str, str], dict] = {}
     segment_cache: dict = {}
     for d in docs:
         if not d.ok or d.role in MACHINE_READABLE_ROLES or d.role not in roles:
@@ -76,19 +75,15 @@ def named_org_relations(
             key = resolve_name(entity.name).key or entity.name.strip().lower()
             if not key:
                 continue
-            if entity.direction == DOWNSTREAM:
-                downstream_keys.add(key)
-            held = out.get(key)
-            # The reading with the most behind it stands for the party.
+            claim_key = (
+                key, entity.direction, entity.subject, d.doc_id, entity.evidence,
+            )
+            held = out.get(claim_key)
             if held is not None and entity.confidence <= held["confidence"]:
                 continue
-            out[key] = _relation(
+            out[claim_key] = _relation(
                 entity.name, d.doc_id, entity.evidence, entity.subject,
                 entity.confidence, entity.grounded, entity.signals,
                 direction=entity.direction,
             )
-    for key in downstream_keys:
-        rel = out.get(key)
-        if rel is not None and rel["direction"] != DOWNSTREAM:
-            out[key] = {**rel, "direction": DOWNSTREAM, "action": _ACTION}
     return list(out.values())

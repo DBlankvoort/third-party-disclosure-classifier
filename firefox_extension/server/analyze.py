@@ -155,6 +155,7 @@ class _Probe:
             "accepted": record.get("accepted") or "",
             "available": bool(record.get("available", True)),
             "requests": len(self.requests),
+            "observed_at": record.get("probed_at") or 0,
         }
 
     def join(self, timeout: float = PROBE_JOIN_TIMEOUT) -> None:
@@ -330,4 +331,25 @@ def analyze_url(
         "undisclosed_parties": _undisclosed(observed, named, sharing),
         "cmp_parties": cmp_parties,
         "corroboration": corroboration,
+        "interpretation": {
+            "traffic": "Observed network contact; payload and purpose were not inspected.",
+            "policy": "A statement in a collected document, not proof that the practice occurred.",
+            "vendor": "Registry or consent-interface membership, not proof of a transaction.",
+            "inventory": "Permission to sell advertising inventory, not personal-data transfer.",
+        },
+        "coverage": {
+            "probe_available": bool(probe_info.get("available")),
+            "probe_cached": bool(probe_info.get("cached")),
+            "probe_observed_at": probe_info.get("observed_at") or 0,
+            "probe_treatment": "fresh no-action baseline followed by accept-all and reject-all treatments when controls are available",
+            "probe_limitations": [
+                "one clean browser profile",
+                "one short page-load observation",
+                "reject-all is measured only when directly exposed and recognised",
+                "request destinations only; no payload inspection",
+            ],
+            "documents_failed": len(failed),
+            "documents_fetched": fetched,
+            "poligraph_available": poligraph_on,
+        },
     }

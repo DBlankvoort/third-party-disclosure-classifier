@@ -5,7 +5,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from .entities import canonical_key, entity_for_domain, registrable_domain
-from .probe import PRE_CONSENT
+from .probe import consent_summary
 
 INFRASTRUCTURE_DOMAINS = {
     "gstatic.com", "jsdelivr.net", "unpkg.com", "bootstrapcdn.com",
@@ -19,25 +19,19 @@ def _is_first_party(reg: str, origin_reg: str, first_party: set[str] | None) -> 
         return True
     if origin_reg and reg == origin_reg:
         return True
-    if first_party:
-        label = reg.split(".")[0]
-        return label in first_party
     return False
 
 
 def consent_state(states) -> str:
     """The consent an organisation's contacts were made under."""
-    values = {s for s in (states or ()) if s}
-    if not values:
-        return ""
-    return PRE_CONSENT if PRE_CONSENT in values else sorted(values)[0]
+    return consent_summary(states)
 
 
 def observed_hosts(
     requests,
     origin: str,
     first_party: set[str] | None = None,
-    include_infrastructure: bool = False,
+    include_infrastructure: bool = True,
 ) -> list[dict]:
     """Group observed requests by the third-party organisation contacted."""
     contacts = observed_contacts(
@@ -70,7 +64,7 @@ def observed_contacts(
     requests,
     origin: str,
     first_party: set[str] | None = None,
-    include_infrastructure: bool = False,
+    include_infrastructure: bool = True,
 ) -> list[dict]:
     """Group observed requests by contacted registrable domain."""
     origin_reg = registrable_domain(urlparse(origin).hostname or "")
@@ -95,8 +89,10 @@ def observed_contacts(
             "initiators": set(),
             "redirects": 0,
             "redirect_targets": set(),
+            "infrastructure": reg in INFRASTRUCTURE_DOMAINS,
         })
         rec["types"].add((req or {}).get("type") or "other")
+        rec["consent_states"].update((req or {}).get("consent_states") or ())
         rec["consent_states"].add((req or {}).get("consent") or "")
         rec["requests"] += 1
         initiator = (req or {}).get("originUrl") or (req or {}).get("documentUrl") or ""

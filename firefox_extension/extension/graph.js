@@ -33,10 +33,10 @@ const KIND_LABEL = {
   declares_supply_chain: "declares next supply-chain participant",
 };
 const VIEW_QUESTION = {
-  lower_bound: "What browser-visible personal-data transfers almost certainly occurred?",
-  possibility: "What transfers do the collected vectors indicate may be contemplated?",
+  lower_bound: "Which third-party domains did a bounded browser session contact?",
+  possibility: "Which onward disclosures are compatible with the collected statements?",
   contacts_domain: "Which third-party domains received browser requests?",
-  traffic_policy: "To whom might contacted third parties disclose received data?",
+  traffic_policy: "What do contacted parties say they may do with customer data?",
   discloses_relation_with: "Which recipients does this organisation say may receive personal data?",
   authorises_inventory_sale: "Who is authorised to sell this organisation's ad inventory?",
   schain: "Which supply paths were declared in observed programmatic transactions?",

@@ -158,6 +158,11 @@ class TestChainVerification:
         report = chain_verification(chains, {})
         assert report.n_verified == 0
 
+    def test_vendor_membership_is_not_a_personal_data_flow(self):
+        g = SharingGraph()
+        add_target(g, "site", "site.example", [_rel("Bravo", sources=["tcf_gvl"])])
+        assert sharing_chains(g, parties=2) == []
+
 
 class TestChainSheet:
     def test_sheet_carries_the_evidence_behind_every_hop(self, tmp_path):

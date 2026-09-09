@@ -17,6 +17,16 @@ function originOf(url) {
   }
 }
 
+function minimizedRequestUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    return `${u.protocol}//${u.host}/`;
+  } catch (e) {
+    return "";
+  }
+}
+
 function reset(tabId, origin) {
   perTab.set(tabId, {
     origin, requests: [], schains: [], seen: new Set(), chainSeen: new Set(),
@@ -114,8 +124,10 @@ browser.webRequest.onBeforeRequest.addListener(
     if (rec.seen.has(key)) return;
     rec.seen.add(key);
     rec.requests.push({
-      url, type, requestId: details.requestId || "",
-      originUrl: details.originUrl || "", documentUrl: details.documentUrl || "",
+      url: minimizedRequestUrl(url), type, requestId: details.requestId || "",
+      originUrl: minimizedRequestUrl(details.originUrl || ""),
+      documentUrl: minimizedRequestUrl(details.documentUrl || ""),
+      observedMs: Date.now(),
     });
   },
   { urls: ["<all_urls>"] },
@@ -129,7 +141,7 @@ browser.webRequest.onBeforeRedirect.addListener(
     const request = rec.requests.find((item) => item.requestId === details.requestId);
     if (request) {
       request.redirected = true;
-      request.redirectUrl = details.redirectUrl || "";
+      request.redirectUrl = minimizedRequestUrl(details.redirectUrl || "");
     }
   },
   {urls: ["<all_urls>"]},

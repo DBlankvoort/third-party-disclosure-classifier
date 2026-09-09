@@ -6,14 +6,27 @@ import json
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 PRE_CONSENT = "pre_consent"
-POST_CONSENT = "post_consent"
+POST_CONSENT = "post_accept_all"
+POST_REJECTION = "post_reject_all"
 
 PROBE_TIMEOUT_MS = 20000
 SETTLE_MS = 2500
 ACCEPT_SETTLE_MS = 3000
 CLICK_TIMEOUT_MS = 2500
+
+
+def minimize_request_url(url: str) -> str:
+    """Retain routing information without persisting user/query secrets."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return ""
+    return urlunsplit((parsed.scheme, parsed.netloc, "/", "", ""))
 
 _ACCEPT_TEXT = (
     "accept all", "accept all cookies", "allow all", "allow all cookies",
@@ -37,6 +50,13 @@ _REJECT_TEXT = (
     "beheren", "instellingen", "odrzuć", "ustawienia",
 )
 
+_REJECT_ALL_TEXT = (
+    "reject all", "decline all", "deny all", "refuse all", "necessary only",
+    "essential only", "alle ablehnen", "alles ablehnen", "tout refuser",
+    "rechazar todo", "rechazar todas", "rifiuta tutto", "alles weigeren",
+    "odrzuć wszystko",
+)
+
 _CLICKABLE = "button, [role=button], a[href='#'], a[role=button], input[type=button], input[type=submit]"
 
 
@@ -48,6 +68,13 @@ def _is_accept(text: str) -> bool:
     if any(bad in t for bad in _REJECT_TEXT):
         return False
     return any(t == phrase or t.startswith(phrase) for phrase in _ACCEPT_TEXT)
+
+
+def _is_reject(text: str) -> bool:
+    t = " ".join(text.split()).strip().lower().strip(".!→ ")
+    return bool(t) and len(t) <= 60 and any(
+        t == phrase or t.startswith(phrase) for phrase in _REJECT_ALL_TEXT
+    )
 
 
 def accept_consent(page) -> str:
@@ -73,6 +100,27 @@ def accept_consent(page) -> str:
     return ""
 
 
+def reject_consent(page) -> str:
+    """Click a directly exposed reject-all/necessary-only control."""
+    for frame in page.frames:
+        try:
+            elements = frame.query_selector_all(_CLICKABLE)
+        except Exception:  # noqa: BLE001
+            continue
+        for el in elements:
+            try:
+                if not el.is_visible():
+                    continue
+                label = el.inner_text() or el.get_attribute("value") or ""
+                if not _is_reject(label):
+                    continue
+                el.click(timeout=CLICK_TIMEOUT_MS)
+                return " ".join(label.split())
+            except Exception:  # noqa: BLE001
+                continue
+    return ""
+
+
 def probe_origin(
     origin: str,
     timeout_ms: int = PROBE_TIMEOUT_MS,
@@ -89,28 +137,44 @@ def probe_origin(
         return [], ""
 
     requests: list[dict] = []
-    phase = PRE_CONSENT
-    accepted = ""
+    sequence = 0
+    interactions: list[str] = []
 
-    def record(req) -> None:
-        requests.append({
-            "url": req.url, "type": req.resource_type, "consent": phase,
-        })
+    def recorder(state: list[str]):
+        def record(req) -> None:
+            nonlocal sequence
+            sequence += 1
+            requests.append({
+                "url": minimize_request_url(req.url),
+                "type": req.resource_type,
+                "consent": state[0],
+                "sequence": sequence,
+                "observed_ms": int(time.time() * 1000),
+            })
+
+        return record
 
     pw = browser = None
     try:
         pw = sync_playwright().start()
         browser = pw.chromium.launch(headless=True)
-        context = browser.new_context()   # no storage state, discarded below
-        page = context.new_page()
-        page.on("request", record)
-        page.goto(origin, wait_until="domcontentloaded", timeout=timeout_ms)
-        page.wait_for_timeout(settle_ms)
-        accepted = accept_consent(page)
-        if accepted:
-            phase = POST_CONSENT
-            page.wait_for_timeout(accept_settle_ms)
-        context.close()
+        for action, post_state in (
+            (accept_consent, POST_CONSENT),
+            (reject_consent, POST_REJECTION),
+        ):
+            context = browser.new_context()
+            page = context.new_page()
+            phase = [PRE_CONSENT]
+
+            page.on("request", recorder(phase))
+            page.goto(origin, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.wait_for_timeout(settle_ms)
+            clicked = action(page)
+            if clicked:
+                interactions.append(f"{post_state}:{clicked}")
+                phase[0] = post_state
+                page.wait_for_timeout(accept_settle_ms)
+            context.close()
     except Exception as exc:  # noqa: BLE001
         print(f"[probe] {origin}: {type(exc).__name__}: {exc}", file=sys.stderr)
     finally:
@@ -120,27 +184,49 @@ def probe_origin(
         finally:
             if pw is not None:
                 pw.stop()
-    return requests, accepted
+    return requests, "; ".join(interactions)
 
 
 def merge_requests(*lists) -> list[dict]:
-    """One request list from several, keeping the earliest consent state each
-    URL was seen under."""
-    order = {PRE_CONSENT: 0, "": 1, POST_CONSENT: 2}
+    """Combine captures while retaining every observed consent treatment."""
     best: dict[tuple[str, str], dict] = {}
     for reqs in lists:
         for req in reqs or ():
             if not isinstance(req, dict):
                 continue
-            key = (req.get("url") or "", req.get("type") or "")
+            item = dict(req)
+            item["url"] = minimize_request_url(item.get("url") or "")
+            key = (item["url"], item.get("type") or "")
             held = best.get(key)
             if held is None:
-                best[key] = dict(req)
+                state = item.get("consent") or ""
+                item["consent_states"] = [state] if state else []
+                item["observations"] = int(item.get("observations") or 1)
+                best[key] = item
                 continue
-            rank = order.get(req.get("consent") or "", 1)
-            if rank < order.get(held.get("consent") or "", 1):
-                held["consent"] = req.get("consent") or ""
+            states = set(held.get("consent_states") or ())
+            state = item.get("consent") or ""
+            if state:
+                states.add(state)
+            held["consent_states"] = sorted(states)
+            held["observations"] = int(held.get("observations") or 1) + int(
+                item.get("observations") or 1)
+            held["consent"] = consent_summary(states)
     return list(best.values())
+
+
+def consent_summary(states) -> str:
+    values = {s for s in (states or ()) if s}
+    post = values & {POST_CONSENT, POST_REJECTION}
+    if PRE_CONSENT in values and post:
+        return "pre_and_post_choice"
+    if len(post) > 1:
+        return "multiple_post_choice_states"
+    if PRE_CONSENT in values:
+        return PRE_CONSENT
+    if post:
+        return sorted(post)[0]
+    return ""
 
 
 # --------------------------------------------------------------------------- #

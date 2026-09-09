@@ -64,6 +64,14 @@ class TestOrigin:
         with pytest.raises(ValueError):
             origin_of("ftp://a.example")
 
+    @pytest.mark.parametrize("url", [
+        "http://127.0.0.1/private", "http://[::1]/", "http://localhost/",
+        "http://169.254.169.254/latest/meta-data/",
+    ])
+    def test_a_local_or_private_target_is_rejected(self, url):
+        with pytest.raises(ValueError):
+            origin_of(url)
+
     def test_the_target_id_follows_the_corpus_convention(self):
         assert target_for_origin("https://a.example").id == "website__a-example"
 
@@ -310,6 +318,20 @@ class TestEvidenceKind:
         with pytest.raises(ValueError, match="unknown evidence kind"):
             _walk(tmp_path, 1, evidence_kind="unsupported")
 
+    def test_traffic_policy_only_continues_through_compatible_disclosures(
+        self, tmp_path, recorded,
+    ):
+        recorded["observed"]["https://seed.example"] = [{
+            "domain": "doubleclick.net", "entity": "Google",
+            "basis": "domain_map", "types": ["script"], "requests": 1,
+        }]
+        recorded["relations"]["https://google.com"] = [
+            _rel("Criteo", subject="site_visitor"),
+        ]
+        walk = _walk(tmp_path, 3, evidence_kind="traffic_policy")
+        walk.run()
+        assert "https://criteo.com" not in recorded["fetched"]
+
     def test_adtech_view_does_not_reinterpret_ad_system_ads_txt(
         self, tmp_path, recorded,
     ):
@@ -368,7 +390,7 @@ class TestFirstParty:
             "smbc", "comics",
         }
 
-    def test_the_traffic_walk_drops_the_site_s_own_domains(self, tmp_path):
+    def test_the_traffic_walk_only_drops_the_exact_site_domain(self, tmp_path):
         corpus, _ = self._corpus(tmp_path)
         requests = [
             {"url": "https://smbc-comics.net/a.png", "type": "image"},
@@ -377,7 +399,9 @@ class TestFirstParty:
         _relations, observed = expand_mod.analyse_origin(
             corpus, self.ORIGIN, requests=requests, evidence_kind="contacts_domain",
         )
-        assert [o["domain"] for o in observed] == ["doubleclick.net"]
+        assert [o["domain"] for o in observed] == [
+            "doubleclick.net", "smbc-comics.net",
+        ]
 
 
 

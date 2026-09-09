@@ -151,6 +151,14 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "tpd-extension-bridge/0.1"
 
     # -- helpers ---------------------------------------------------------- #
+    def _authorized(self) -> bool:
+        """Reject cross-origin webpages; CORS alone does not prevent writes."""
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True  # command-line/local diagnostics
+        allowed = CONFIG["allowed_origin"]
+        return origin == allowed if allowed else origin.startswith("moz-extension://")
+
     def _cors(self) -> None:
         origin = self.headers.get("Origin", "")
         allowed = CONFIG["allowed_origin"]
@@ -174,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self) -> None:  # noqa: N802
+        if not self._authorized():
+            self._json(403, {"error": "origin not allowed"})
+            return
         self.send_response(204)
         self._cors()
         self.end_headers()
@@ -200,6 +211,9 @@ class Handler(BaseHTTPRequestHandler):
             return None
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self._authorized():
+            self._json(403, {"error": "origin not allowed"})
+            return
         parsed = urlparse(self.path)
         if parsed.path not in ("/analyze", "/graph", "/graph/stop", "/graph/edit"):
             self._json(404, {"error": "not found", "paths": self._PATHS})
@@ -277,6 +291,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._authorized():
+            self._json(403, {"error": "origin not allowed"})
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             self._json(200, {"ok": True, "ner": CONFIG["use_ner"],

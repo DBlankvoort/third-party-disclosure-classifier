@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import multiprocessing
 import os
 import threading
@@ -79,6 +80,15 @@ def origin_of(url: str) -> str:
     p = urlparse(url.strip())
     if p.scheme not in ("http", "https") or not p.netloc:
         raise ValueError(f"not an http(s) URL: {url!r}")
+    host = (p.hostname or "").rstrip(".").lower()
+    if not host or host == "localhost" or host.endswith((".localhost", ".local")):
+        raise ValueError("local targets are not eligible for collection")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ValueError("private or non-global targets are not eligible for collection")
     return f"{p.scheme}://{p.netloc}"
 
 
@@ -498,6 +508,21 @@ class Expansion:
                      "parties_done": self.progress.parties_total} \
             if phase == "done" else {}
         self._set(phase=phase, current="", elapsed=self.elapsed, **completed)
+        self.graph.metadata = {
+            "origin": self.origin,
+            "requested_hops": self.hops,
+            "reached_hop": max(
+                (n.hop_first_seen or 0 for n in self.graph.nodes.values()
+                 if n.expanded), default=0,
+            ),
+            "phase": phase,
+            "complete": phase == "done",
+            "elapsed_seconds": round(self.elapsed, 1),
+            "origins_collected": self.progress.crawled,
+            "probe_requested": self.probe,
+            "unresolved_parties": len(self.unresolved),
+            "evidence_kind": self.evidence_kind,
+        }
         return self.graph
 
     # -- cross-checks --------------------------------------------------- #
@@ -719,19 +744,20 @@ class Expansion:
                     at_seed = source is not None and source.hop_first_seen == 0
                     if at_seed and edge.kind is not EdgeKind.CONTACTS_DOMAIN:
                         continue
-                if (self.evidence_kind == "possibility" and source is not None
-                        and source.hop_first_seen > 0
-                        and edge.kind is EdgeKind.DISCLOSES_RELATION_WITH
-                        and not any(not ev.negative and carries_upstream_data(ev.subject)
-                                    for ev in edge.evidence)):
-                    continue
-                    if not at_seed and edge.kind is not EdgeKind.DISCLOSES_RELATION_WITH:
+                    if (not at_seed
+                            and edge.kind is not EdgeKind.DISCLOSES_RELATION_WITH):
                         continue
                     if not at_seed and not any(
                         not ev.negative and carries_upstream_data(ev.subject)
                         for ev in edge.evidence
                     ):
                         continue
+                if (self.evidence_kind == "possibility" and source is not None
+                        and source.hop_first_seen > 0
+                        and edge.kind is EdgeKind.DISCLOSES_RELATION_WITH
+                        and not any(not ev.negative and carries_upstream_data(ev.subject)
+                                    for ev in edge.evidence)):
+                    continue
                 node = self.graph.nodes.get(edge.dst)
                 if node is None:
                     continue

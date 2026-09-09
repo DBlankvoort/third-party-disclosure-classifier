@@ -187,6 +187,12 @@ class TestTermination:
 
 
 class TestSerialisation:
+    def test_round_trip_preserves_collection_metadata(self):
+        g = SharingGraph()
+        g.metadata = {"complete": False, "requested_hops": 3, "reached_hop": 1}
+        back = SharingGraph.from_dict(g.to_dict())
+        assert back.metadata == g.metadata
+
     def test_round_trip_preserves_edges_and_evidence(self):
         g = SharingGraph()
         add_target(g, "a", "a", [_rel("Criteo", text="we share with Criteo")])

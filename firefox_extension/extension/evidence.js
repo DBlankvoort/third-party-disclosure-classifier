@@ -27,8 +27,8 @@ const META = {
   },
   contacts_domain: {
     title: "Web traffic", colour: "#27786d", proposition: "contacts_domain",
-    meaning: "The browser contacted the recorded domain during the bounded observation session and consent state.",
-    scope: "Request metadata describes contact. It does not establish payload, purpose, legal role, or lawful basis. Each domain is checked against an independent tracker list, which says what the domain is known to do, never what this request carried.",
+    meaning: "A bounded browser session sent one or more requests to the recorded domain.",
+    scope: "This proves destination contact only. Request values and bodies are deliberately not retained, so it does not establish that personal data was transmitted, nor payload, purpose, legal role, or lawful basis. Tracker-list status describes a domain generally, never this request.",
   },
 };
 const PROSE = new Set(["policy", "cookie_table", "vendor_table"]);
@@ -131,6 +131,9 @@ function trafficCard(party) {
     cd.textContent = party.tracker_categories.join(", ");
     dl.append(ct, cd);
   }
+  if (party.infrastructure) badges.append(badge(
+    "shared infrastructure; operator contact may not identify the data recipient",
+    "unconfirmed"));
   card.append(dl); return card;
 }
 

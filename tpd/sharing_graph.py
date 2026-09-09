@@ -17,6 +17,7 @@ from .entities import (
     tcf_vendor,
 )
 from .tracks import (
+    INVENTORY,
     PERSONAL_DATA,
     TRACKS,
     UNKNOWN,
@@ -302,6 +303,7 @@ class SharingGraph:
     def __init__(self) -> None:
         self.nodes: dict[str, Node] = {}
         self.edges: dict[tuple[str, str, str], Edge] = {}
+        self.metadata: dict = {}
         self._out: dict[str, list[Edge]] = {}
         self._in: dict[str, list[Edge]] = {}
 
@@ -537,6 +539,7 @@ class SharingGraph:
 
     def subgraph(self, track: str, prune: bool = True) -> SharingGraph:
         out = SharingGraph()
+        out.metadata = dict(self.metadata)
         for edge in self.edges.values():
             kept = [e for e in edge.evidence if e.track == track]
             if not kept:
@@ -553,6 +556,7 @@ class SharingGraph:
     # ------------------------------------------------------- serialisation
     def to_dict(self) -> dict:
         return {
+            "metadata": dict(self.metadata),
             "nodes": [n.to_dict() for n in self.nodes.values()],
             "edges": [e.to_dict() for e in self.edges.values()],
         }
@@ -560,6 +564,7 @@ class SharingGraph:
     @classmethod
     def from_dict(cls, d: dict) -> SharingGraph:
         g = cls()
+        g.metadata = dict(d.get("metadata") or {})
         for nd in d.get("nodes", []):
             node = Node.from_dict(nd)
             g.nodes[node.id] = node
@@ -586,7 +591,9 @@ class SharingGraph:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("w", encoding="utf-8") as f:
-            f.write('{\n "nodes": [\n')
+            f.write('{\n "metadata": ')
+            json.dump(graph.metadata, f)
+            f.write(',\n "nodes": [\n')
             for i, node in enumerate(graph.nodes.values()):
                 f.write("  " if i == 0 else ",\n  ")
                 json.dump(node.to_dict(), f)
@@ -673,8 +680,13 @@ class SharingChain:
 
     @property
     def fully_disclosed(self) -> bool:
-        """Whether every hop rests on a written disclosure."""
-        return self.traffic_only_hops == 0
+        """Compatibility alias for whether every hop is explicitly declared."""
+        return self.entirely_declared
+
+    @property
+    def entirely_declared(self) -> bool:
+        """Whether policy/structured disclosure evidence supports every hop."""
+        return all(EvidenceSource.POLICY.value in hop.sources for hop in self.hops)
 
     @property
     def subject_stated(self) -> bool:
@@ -687,12 +699,7 @@ def _positive_evidence(edge: Edge) -> list[Evidence]:
 
 
 def flow_hops(graph: SharingGraph, track: str | None = None) -> dict[str, list[ChainHop]]:
-    """Adjacency of party-to-party data flow"""
-    owners: dict[str, str] = {}
-    for edge in graph.edges.values():
-        if edge.kind is EdgeKind.RESOLVES_TO:
-            owners[edge.src] = edge.dst
-
+    """Adjacency of asserted party-to-party flows."""
     out: dict[str, list[ChainHop]] = {}
     for edge in graph.edges.values():
         positive = [
@@ -701,17 +708,11 @@ def flow_hops(graph: SharingGraph, track: str | None = None) -> dict[str, list[C
         ]
         if not positive:
             continue
-        if edge.kind in {
-            EdgeKind.DISCLOSES_RELATION_WITH,
-            EdgeKind.LISTS_VENDOR,
-            EdgeKind.AUTHORISES_INVENTORY_SALE,
-        }:
+        if edge.kind is EdgeKind.DISCLOSES_RELATION_WITH:
             src, dst, via = edge.src, edge.dst, ""
-        elif edge.kind is EdgeKind.CONTACTS_DOMAIN:
-            dst = owners.get(edge.dst, "")
-            if not dst:
-                continue
-            src, via = edge.src, edge.dst
+        elif (edge.kind is EdgeKind.AUTHORISES_INVENTORY_SALE
+              and (track is None or track == INVENTORY)):
+            src, dst, via = edge.src, edge.dst, ""
         else:
             continue
         if src == dst:

@@ -78,14 +78,14 @@ class TestObservedHosts:
         assert google["domains"] == ["doubleclick.net", "googlesyndication.com"]
         assert google["requests"] == 2
 
-    def test_shared_infrastructure_is_excluded_by_default(self):
+    def test_shared_infrastructure_is_retained_and_labelled(self):
         reqs = [{"url": "https://cdn.jsdelivr.net/x.js", "type": "script"}]
-        assert observed_hosts(reqs, self.ORIGIN) == []
-        assert observed_hosts(reqs, self.ORIGIN, include_infrastructure=True)
+        assert observed_contacts(reqs, self.ORIGIN)[0]["infrastructure"] is True
+        assert observed_hosts(reqs, self.ORIGIN)
 
-    def test_first_party_tokens_are_honoured(self):
+    def test_affiliated_domains_are_not_silently_assumed_first_party(self):
         reqs = [{"url": "https://static.guim.co.uk/x.js", "type": "script"}]
-        assert observed_hosts(reqs, self.ORIGIN, first_party={"guim"}) == []
+        assert observed_contacts(reqs, self.ORIGIN, first_party={"guim"})
 
     def test_contacts_retain_domains_without_an_attributed_organisation(self):
         reqs = [{"url": "https://unmapped-example.test/pixel", "type": "image"}]

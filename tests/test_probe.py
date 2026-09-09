@@ -10,8 +10,10 @@ from tpd import probe as probe_mod
 from tpd.collect.base import Corpus
 from tpd.probe import (
     POST_CONSENT,
+    POST_REJECTION,
     PRE_CONSENT,
     _is_accept,
+    _is_reject,
     cached_probe,
     merge_requests,
     read_probe,
@@ -33,6 +35,11 @@ class TestAcceptControl:
                       "Alle ablehnen", "Customize choices", "Accept only necessary"):
             assert not _is_accept(label)
 
+    def test_reject_all_labels_are_recognised_but_settings_are_not(self):
+        assert _is_reject("Reject all")
+        assert _is_reject("Alle ablehnen")
+        assert not _is_reject("Manage preferences")
+
     def test_prose_is_not_a_control(self):
         assert not _is_accept(
             "We and our partners accept all responsibility for the data we "
@@ -50,17 +57,18 @@ class TestMergeRequests:
             [{"url": "https://b.example/y.js", "type": "script"}],
         )
         assert {r["url"] for r in merged} == {
-            "https://a.example/x.js", "https://b.example/y.js",
+            "https://a.example/", "https://b.example/",
         }
 
-    def test_a_pre_consent_request_stays_pre_consent(self):
+    def test_a_request_seen_on_both_sides_retains_both_states(self):
         merged = merge_requests(
             [{"url": "https://a.example/x.js", "type": "script",
               "consent": POST_CONSENT}],
             [{"url": "https://a.example/x.js", "type": "script",
               "consent": PRE_CONSENT}],
         )
-        assert [r["consent"] for r in merged] == [PRE_CONSENT]
+        assert merged[0]["consent"] == "pre_and_post_choice"
+        assert set(merged[0]["consent_states"]) == {PRE_CONSENT, POST_CONSENT}
 
     def test_unlabelled_traffic_survives(self):
         merged = merge_requests([{"url": "https://a.example/x.js", "type": "script"}])
@@ -69,7 +77,10 @@ class TestMergeRequests:
 
 class TestConsentState:
     def test_a_party_seen_before_the_dialog_is_unconditional(self):
-        assert consent_state({PRE_CONSENT, POST_CONSENT}) == PRE_CONSENT
+        assert consent_state({PRE_CONSENT, POST_CONSENT}) == "pre_and_post_choice"
+
+    def test_rejection_is_distinct_from_acceptance(self):
+        assert consent_state({POST_REJECTION}) == POST_REJECTION
 
     def test_a_party_seen_only_after_consent_is_conditional(self):
         assert consent_state({POST_CONSENT}) == POST_CONSENT
@@ -205,4 +216,4 @@ class TestSharedCapture:
             [{"url": "https://session.example/a", "type": "script"}], _PROBED,
         )
         assert {r["url"] for r in merged} == {
-            "https://session.example/a", "https://doubleclick.net/px"}
+            "https://session.example/", "https://doubleclick.net/"}

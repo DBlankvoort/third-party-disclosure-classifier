@@ -437,6 +437,7 @@ def measure(
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "origin": origin,
+        "collection": dict(graph.metadata),
         "graph": graph_measures(graph),
         "reach": reach_measures(graph),
         "resolvability": resolvability_measures(graph),
@@ -493,6 +494,11 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
     vocab = m["vocabulary"]
     chains = m["chains"]
     corr = m["corroboration"][PERSONAL_DATA]
+    collection = m.get("collection") or {}
+    completeness = (
+        "complete for its configured stopping rule"
+        if collection.get("complete") else "incomplete or stopped early"
+    )
 
     ring_rows = [
         [f"ring {hop}", r["origins"], r["named_out_degree"]["mean"],
@@ -519,15 +525,22 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
     <p class="kicker">Draft findings · generated {_e(m['generated_at'])}</p>
     <h1>{_e(title)}</h1>
     <p class="lede">
-        Reports key findings from crawling <code>{_e(m.get('origin') or 'one seed origin')}</code>.
+        Reports evidence collected from <code>{_e(m.get('origin') or 'one seed origin')}</code>.
+        This is a bounded, path-dependent observation, not an ecosystem total.
+    </p>
+    <p class="aside">Collection status: <strong>{_e(completeness)}</strong>;
+      requested depth {_fmt(collection.get('requested_hops', 'unknown'))},
+      reached depth {_fmt(collection.get('reached_hop', 'unknown'))},
+      {_fmt(collection.get('origins_collected', 'unknown'))} origins collected,
+      {_fmt(collection.get('unresolved_parties', 'unknown'))} party names unresolved.
     </p>
   </header>
 
   <section>
     <h2>What the walk reaches</h2>
     <div class="tiles">
-      {_stat_tile(g['recipients'], 'parties data reaches',
-                  'a disclosure names them as a recipient')}
+      {_stat_tile(g['recipients'], 'parties named as recipients',
+                  'one or more collected claims name them')}
       {_stat_tile(g['suppliers'], 'parties that supply',
                   'a disclosure names them as a source')}
       {_stat_tile(g['edges_by_track'][PERSONAL_DATA], 'personal-data arrangements',
@@ -550,7 +563,7 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
   </section>
 
   <section>
-    <h2>How far the data travels</h2>
+    <h2>How far compatible claims can be composed</h2>
     {_reach_section(m.get('reach') or {})}
   </section>
 
@@ -580,7 +593,7 @@ def render_html(m: dict, title: str = "Disclosure graph findings") -> str:
   </section>
 
   <section>
-    <h2>Chains through four parties</h2>
+    <h2>Candidate chains through four parties</h2>
     {_chain_section(chains)}
   </section>
 
