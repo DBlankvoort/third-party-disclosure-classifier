@@ -17,6 +17,16 @@ const KIND_COLOR = {
   contacts_domain: "#27786d",
   resolves_to: "#8c928e",
 };
+const CORROBORABLE_KINDS = new Map([
+  ["authorises_inventory_sale", {
+    type: "sellers_json_confirmation",
+    label: "Only sales the sellers.json confirms",
+  }],
+  ["contacts_domain", {
+    type: "tracker_list_confirmation",
+    label: "Only domains a tracker list knows",
+  }],
+]);
 const KIND_LABEL = {
   discloses_relation_with: "discloses a relation with",
   lists_vendor: "lists as a vendor",
@@ -39,6 +49,36 @@ const SUBJECT_LABEL = {
   not_applicable: "no personal data",
   unknown: "population not stated",
 };
+
+const SOURCE_LABEL = {
+  policy: "policy text",
+  registry: "registry file",
+  traffic: "observed traffic",
+  resolution: "name resolution",
+};
+
+const RECONCILE_LABEL = {
+  confirmed: "confirmed by the receiving party's sellers.json",
+  absent: "not named in the receiving party's sellers.json",
+  confidential_only: "receiving party withholds every seller as confidential",
+  no_sellers_json: "receiving party publishes no sellers.json",
+  not_collected: "receiving party was not collected",
+  unknown_domain: "no site known for one of the two parties",
+  no_seller_id: "ads.txt provides no seller account to match",
+  relationship_mismatch: "seller account exists, but its role conflicts with ads.txt",
+};
+const RECONCILE_ORDER = [
+  "confirmed", "relationship_mismatch", "absent", "no_seller_id", "confidential_only", "no_sellers_json",
+  "not_collected", "unknown_domain",
+];
+
+// Tracker-list result for a contacted domain.
+const TRACKER_LABEL = {
+  confirmed: "recognised as a tracker",
+  known_not_tracking: "listed, but not as a tracker",
+  unlisted: "on no list we hold",
+};
+const TRACKER_ORDER = ["confirmed", "known_not_tracking", "unlisted"];
 
 const SITE_KIND_LABEL = {
   website: "website",
@@ -81,6 +121,8 @@ const state = {
   filters: {
     generic: true, domains: true,
     ungrounded: true,
+    corroborated: true,
+    prose: false,
   },
   editing: false,
   mergeFrom: null,
@@ -108,6 +150,58 @@ function edgeSources(edge) {
   return new Set(edgeEvidence(edge).map((ev) => ev.source));
 }
 
+function edgeTypes(edge) {
+  return new Set(edgeEvidence(edge).map((ev) => ev.evidence_type).filter(Boolean));
+}
+
+function isCorroborated(edge) {
+  const rule = CORROBORABLE_KINDS.get(state.kind);
+  return Boolean(rule) && edgeTypes(edge).has(rule.type);
+}
+
+function corroborationApplies() {
+  return CORROBORABLE_KINDS.has(state.kind);
+}
+
+function edgeLabel(edge) {
+  return KIND_LABEL[edge.kind] || edge.kind;
+}
+
+function mainEvidenceEdge(edge) {
+  const types = edgeTypes(edge);
+  const destination = state.byId.get(edge.dst);
+  const hop = destination && destination.hop_first_seen;
+  if (edge.kind === "contacts_domain") {
+    return hop === 1 && types.has("network_contact")
+      && types.has("tracker_list_confirmation");
+  }
+  if (edge.kind === "authorises_inventory_sale") {
+    return hop > 1 && types.has("ads_txt_authorisation")
+      && types.has("sellers_json_confirmation");
+  }
+  if (edge.kind === "resolves_to") {
+    return (state.incoming.get(edge.src) || []).some((candidate) =>
+      candidate.kind === "contacts_domain" && mainEvidenceEdge(candidate));
+  }
+  return false;
+}
+
+function disclosedDestination(edge) {
+  if (edge.kind === "contacts_domain") {
+    const domain = state.byId.get(edge.dst);
+    return domain && domain.owner_entity_id;
+  }
+  return edge.dst;
+}
+
+function disclosedInProse(edge) {
+  const dst = disclosedDestination(edge);
+  if (!dst) return false;
+  return (state.outgoing.get(edge.src) || []).some((candidate) =>
+    candidate.kind === "discloses_relation_with" && candidate.dst === dst
+      && edgeEvidence(candidate).some((ev) => !ev.negative));
+}
+
 function edgeTracks(edge) {
   return new Set((edge.evidence || []).map((ev) => ev.track || "personal_data"));
 }
@@ -116,13 +210,23 @@ function edgeSubjects(edge) {
   return new Set(edgeEvidence(edge).map((ev) => ev.subject).filter(Boolean));
 }
 
-function edgePasses(edge) {
+function edgeInView(edge) {
   if (!edgeEvidence(edge).length) return false;
-  if (state.kind === "main") return true;
+  if (state.kind === "main") return mainEvidenceEdge(edge);
   if (state.kind === "contacts_domain") {
     return edge.kind === "contacts_domain" || edge.kind === "resolves_to";
   }
   return edge.kind === state.kind;
+}
+
+function edgePasses(edge) {
+  if (!edgeInView(edge)) return false;
+  if (edge.kind === "resolves_to") return true;
+  if (state.kind === "main" && state.filters.prose
+      && !disclosedInProse(edge)) return false;
+  if (corroborationApplies() && state.filters.corroborated
+      && !isCorroborated(edge)) return false;
+  return true;
 }
 
 function nodePasses(node) {
@@ -137,10 +241,19 @@ function nodePasses(node) {
 function computeVisible() {
   const visible = new Set();
   for (const n of state.graph.nodes) {
-    if (!nodePasses(n)) continue;
-    if (n.hop_first_seen === 0) { visible.add(n.id); continue; }
-    const edges = [...(state.incoming.get(n.id) || []), ...(state.outgoing.get(n.id) || [])];
-    if (edges.some(edgePasses)) visible.add(n.id);
+    if (nodePasses(n) && n.hop_first_seen === 0) visible.add(n.id);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of state.graph.edges) {
+      if (!visible.has(edge.src) || visible.has(edge.dst)
+          || !edgePasses(edge)) continue;
+      const node = state.byId.get(edge.dst);
+      if (!node || !nodePasses(node)) continue;
+      visible.add(edge.dst);
+      changed = true;
+    }
   }
   state.visible = visible;
 }
@@ -761,11 +874,17 @@ function relationCard(edge, direction) {
   const what = document.createElement("div");
   what.className = "what";
   what.textContent = (negative ? "states it does not share " : "")
-    + (KIND_LABEL[edge.kind] || edge.kind)
+    + edgeLabel(edge)
     + (dataTypes.length ? ` — ${dataTypes.slice(0, 4).join(", ")}` : "");
   card.append(what);
 
-  const parts = [...edgeSources(edge)];
+  const parts = [...edgeSources(edge)].map((s) => SOURCE_LABEL[s] || s);
+  if (edgeEvidence(edge).some((e) => e.evidence_type === "sellers_json_confirmation")) {
+    parts.push("cross-checked");
+  }
+  if (state.kind === "main" && edge.kind !== "resolves_to") {
+    parts.push(disclosedInProse(edge) ? "disclosed in prose" : "not found in prose");
+  }
   for (const t of edgeTracks(edge)) if (TRACK_LABEL[t]) parts.push(TRACK_LABEL[t]);
   for (const s of edgeSubjects(edge)) {
     if (SUBJECT_LABEL[s]) parts.push(SUBJECT_LABEL[s]);
@@ -1045,6 +1164,60 @@ function renderStats(snapshot) {
   $("stat-parties-label").textContent = state.kind === "contacts_domain"
     ? "domains shown" : "organisations shown";
   $("stat-crawled").textContent = (snapshot && snapshot.progress.crawled) || 0;
+  renderVerification(snapshot);
+}
+
+function renderVerification(snapshot) {
+  const box = $("verify");
+  const sellers = (snapshot && snapshot.reconciliation) || {};
+  const trackers = (snapshot && snapshot.tracker_check) || {};
+  const pruned = (snapshot && snapshot.pruned) || {};
+  const lines = [];
+  if (sellers.checked) {
+    lines.push([`${(sellers.counts || {}).confirmed || 0} of ${sellers.checked} `
+      + "inventory arrangements confirmed by the receiving party's sellers.json",
+    sellers.counts || {}, RECONCILE_ORDER, RECONCILE_LABEL]);
+  }
+  if (trackers.checked) {
+    lines.push([`${(trackers.counts || {}).confirmed || 0} of ${trackers.checked} `
+      + "contacted domains recognised by a tracker list",
+    trackers.counts || {}, TRACKER_ORDER, TRACKER_LABEL]);
+  }
+  if (!lines.length && !pruned.dropped) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  $("verify-summary").textContent = snapshot && snapshot.corroborated_only
+    ? "Main findings retain tracker-list-confirmed contacts on the first hop "
+      + "and account-matched inventory authorisations on later hops."
+    : "Every arrangement is drawn, corroborated or not.";
+  const rows = $("verify-rows");
+  rows.innerHTML = "";
+  for (const [heading, counts, order, labels] of lines) {
+    const head = document.createElement("div");
+    head.className = "what";
+    head.textContent = heading;
+    rows.append(head);
+    for (const status of order) {
+      const n = counts[status];
+      if (!n) continue;
+      const row = document.createElement("div");
+      row.className = "src";
+      row.textContent = `${n} — ${labels[status] || status}`;
+      rows.append(row);
+    }
+  }
+  if (pruned.dropped) {
+    const head = document.createElement("div");
+    head.className = "what";
+    head.textContent = `${pruned.dropped} parties left out by the rule`;
+    const note = document.createElement("div");
+    note.className = "src";
+    note.textContent = `${pruned.half_met || 0} of them met one record but not `
+      + "the other";
+    rows.append(head, note);
+  }
 }
 
 // -------------------------------------------------------------- collection ---
@@ -1114,8 +1287,11 @@ async function start() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: state.origin, hops: state.hops,
-        time_limit: state.timeLimit * 60, requests, cmp,
+        time_limit: state.timeLimit * 60,
+        requests,
+        cmp,
         evidence_kind: state.kind,
+        corroborated_only: state.kind === "main",
       }),
     });
     data = await resp.json();
@@ -1173,7 +1349,30 @@ function applySnapshot(snapshot, refit) {
   rebuild(refit);
   setProgress(snapshot);
   renderStats(snapshot);
-  $("empty").hidden = state.graph.nodes.length > 0;
+  renderEmptyState();
+}
+
+function renderEmptyState() {
+  const box = $("empty");
+  const collected = state.graph.nodes.length > 0;
+  const shown = state.graph.edges.some(edgePasses);
+  const withheld = collected && !shown && corroborationApplies()
+    && state.filters.corroborated && state.graph.edges.some(edgeInView);
+  box.hidden = collected && (shown || !withheld);
+  if (box.hidden) return;
+  box.innerHTML = "";
+  const head = document.createElement("strong");
+  const note = document.createElement("span");
+  if (withheld) {
+    head.textContent = "Nothing here is confirmed by a second record";
+    note.textContent = "Arrangements were collected, but no receiving party's "
+      + "sellers.json names the party that supplies it. Untick the filter to "
+      + "see the claims that stand on one side only.";
+  } else {
+    head.textContent = "No evidence network collected yet";
+    note.textContent = "Choose a depth and collect evidence from this source.";
+  }
+  box.append(head, note);
 }
 
 function rebuild(refit) {
@@ -1215,12 +1414,13 @@ $("search").addEventListener("keydown", (ev) => {
 
 for (const [id, key] of [
   ["f-generic", "generic"], ["f-domains", "domains"],
-  ["f-ungrounded", "ungrounded"],
+  ["f-ungrounded", "ungrounded"], ["f-corroborated", "corroborated"],
 ]) {
   $(id).addEventListener("change", (ev) => {
     state.filters[key] = ev.target.checked;
     rebuild(false);
     renderStats(lastSnapshot);
+    renderEmptyState();
   });
 }
 
@@ -1239,11 +1439,18 @@ $("kind-nav").addEventListener("click", (ev) => {
   rebuild(false);
   renderStats(lastSnapshot);
   renderLegend();
+  renderEmptyState();
 });
 $("fit-view").addEventListener("click", fit);
 $("show-labels").addEventListener("change", (ev) => {
   state.showAllLabels = ev.target.checked;
   draw();
+});
+$("f-rule").addEventListener("change", (ev) => {
+  state.filters.prose = ev.target.checked;
+  rebuild(false);
+  renderStats(lastSnapshot);
+  renderEmptyState();
 });
 $("edit-toggle").addEventListener("click", () => {
   state.editing = !state.editing;
@@ -1266,6 +1473,10 @@ function selectKind(kind) {
   }
   $("run").textContent = kind === "main"
     ? "Collect all evidence" : `Collect ${label}`;
+  const rule = CORROBORABLE_KINDS.get(kind);
+  $("f-corroborated-box").hidden = !rule;
+  if (rule) $("f-corroborated-label").textContent = rule.label;
+  $("rule-box").hidden = kind !== "main";
 }
 
 // The bridge decides which propositions are evidence about this kind of site:

@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tpd import expand as expand_mod
+from tpd.collect.base import CollectedDoc, Corpus, Target
 from tpd.expand import Expansion, origin_of, target_for_origin
-from tpd.sharing_graph import NodeType, entity_node_id, target_node_id
+from tpd.sharing_graph import (
+    NodeType,
+    SharingGraph,
+    add_target,
+    entity_node_id,
+    target_node_id,
+)
 
 
 def _rel(entity, **kw):
@@ -25,6 +34,7 @@ def recorded(monkeypatch):
     """Wire the walk to a fixed site-to-recipients map, recording each fetch."""
     fetched: list[str] = []
     relations: dict[str, list[dict]] = {}
+    observed: dict[str, list[dict]] = {}
 
     def fake_fetch(corpus, origin, force=False, delay=0.2, render=True, target=None):
         fetched.append(origin)
@@ -33,11 +43,11 @@ def recorded(monkeypatch):
     def fake_analyse(corpus, origin, requests=None, force=False, delay=0.2,
                      fetched=False, cmp=None, probe=False, evidence_kind="main",
                      target=None, site_kind=""):
-        return list(relations.get(origin, [])), []
+        return list(relations.get(origin, [])), list(observed.get(origin, []))
 
     monkeypatch.setattr(expand_mod, "fetch_origin", fake_fetch)
     monkeypatch.setattr(expand_mod, "analyse_origin", fake_analyse)
-    return {"fetched": fetched, "relations": relations}
+    return {"fetched": fetched, "relations": relations, "observed": observed}
 
 
 def _walk(tmp_path, hops, **kw):
@@ -345,3 +355,145 @@ class TestFirstParty:
             corpus, self.ORIGIN, requests=requests, evidence_kind="contacts_domain",
         )
         assert [o["domain"] for o in observed] == ["doubleclick.net"]
+
+
+
+class TestCorroborationRule:
+    """Test collection-time corroboration."""
+
+    def _seed_relations(self, recorded, *entities):
+        recorded["relations"]["https://seed.example"] = [
+            _rel(e) for e in entities
+        ]
+
+    def test_it_is_off_unless_asked_for(self, tmp_path, recorded):
+        self._seed_relations(recorded, "Some Partner")
+        walk = _walk(tmp_path, 1, probe=False)
+        walk.run()
+        assert entity_node_id("Some Partner") in walk.graph.nodes
+        assert walk.snapshot()["pruned"]["dropped"] == 0
+
+    def test_a_party_only_the_policy_names_is_left_out(self, tmp_path, recorded):
+        self._seed_relations(recorded, "Some Partner")
+        walk = _walk(tmp_path, 1, probe=False, corroborated_only=True)
+        walk.run()
+        assert entity_node_id("Some Partner") not in walk.graph.nodes
+        summary = walk.snapshot()["pruned"]
+        assert summary["dropped"] == 1
+        # Prose alone does not satisfy the first-hop rule.
+        assert summary["half_met"] == 0
+
+    def test_a_party_both_records_agree_on_is_kept(self, tmp_path, recorded):
+        recorded["relations"]["https://seed.example"] = [_rel("DoubleClick")]
+        recorded["observed"]["https://seed.example"] = [{
+            "entity": "DoubleClick", "domains": ["doubleclick.net"],
+            "basis": "domain_map", "consent": "pre_consent",
+        }]
+        walk = _walk(tmp_path, 1, probe=False, corroborated_only=True)
+        walk.run()
+        assert entity_node_id("DoubleClick") in walk.graph.nodes
+        assert walk.snapshot()["pruned"]["dropped"] == 0
+
+    def test_a_dropped_party_is_never_expanded(self, tmp_path, recorded):
+        self._seed_relations(recorded, "Some Partner")
+        walk = _walk(tmp_path, 3, probe=False, corroborated_only=True)
+        walk.run()
+        assert "https://somepartner.com" not in recorded["fetched"]
+
+    def test_the_rule_belongs_to_the_main_view_alone(self, tmp_path, recorded):
+        """Single-source views do not use the main-view rule."""
+        self._seed_relations(recorded, "Some Partner")
+        walk = _walk(tmp_path, 1, probe=False, corroborated_only=True,
+                     evidence_kind="discloses_relation_with")
+        assert not walk.corroborated_only
+        walk.run()
+        assert entity_node_id("Some Partner") in walk.graph.nodes
+
+
+class TestTrackerConfirmation:
+    def test_an_observed_tracker_is_marked_in_the_graph(self, tmp_path, recorded):
+        recorded["observed"]["https://seed.example"] = [{
+            "entity": "DoubleClick", "domains": ["doubleclick.net"],
+            "basis": "domain_map", "consent": "pre_consent",
+        }]
+        walk = _walk(tmp_path, 1, probe=False)
+        walk.run()
+        assert walk.snapshot()["tracker_check"]["counts"] == {"confirmed": 1}
+
+    def test_a_walk_over_documents_alone_checks_nothing(self, tmp_path, recorded):
+        self._observed = None
+        walk = _walk(tmp_path, 1, probe=False,
+                     evidence_kind="discloses_relation_with")
+        walk.run()
+        assert walk.snapshot()["tracker_check"]["checked"] == 0
+
+
+class TestChecksAccumulate:
+    """Keep results when later passes skip confirmed edges."""
+
+    def test_a_later_pass_does_not_shorten_the_report(self, tmp_path, recorded):
+        recorded["observed"]["https://seed.example"] = [{
+            "entity": "DoubleClick", "domains": ["doubleclick.net"],
+            "basis": "domain_map", "consent": "pre_consent",
+        }]
+        walk = _walk(tmp_path, 3, probe=False)
+        walk.run()
+        # Report the contact once across all verification passes.
+        assert walk.snapshot()["tracker_check"] == {
+            "checked": 1, "counts": {"confirmed": 1}}
+
+
+class TestSellersJsonNeverBuildsEdges:
+    """Use sellers.json for corroboration, not graph construction."""
+
+    SELLERS = json.dumps({"sellers": [
+        {"seller_id": "1", "name": "Upstream One", "domain": "one.example",
+         "seller_type": "PUBLISHER"},
+        {"seller_id": "2", "name": "Upstream Two", "domain": "two.example",
+         "seller_type": "INTERMEDIARY"},
+    ]})
+    VENDORS = json.dumps({"vendors": [{"name": "Listed Vendor", "purposes": [2]}]})
+
+    @pytest.fixture
+    def broker(self, tmp_path):
+        corpus = Corpus(tmp_path)
+        target = Target(id="website__ssp-example", type="website",
+                        name="ssp.example", url="https://ssp.example")
+        docs = []
+        for i, (role, raw) in enumerate(
+                (("sellers_json", self.SELLERS), ("vendors_json", self.VENDORS))):
+            doc = CollectedDoc(doc_id=f"{role}-{i:02d}",
+                               url=f"https://ssp.example/{role}", role=role,
+                               http_status=200, content_type="application/json")
+            docs.append(corpus.save_doc(target.id, doc, raw))
+        corpus.write_manifest(target, docs)
+        return corpus, target, docs
+
+    def _sources(self, corpus, target, docs, evidence_kind):
+        return {s for rel in expand_mod.relations_for_target(
+            corpus, target.id, docs, first_party=set(),
+            evidence_kind=evidence_kind, site_kind="data_broker",
+        ) for s in rel.get("sources", ())}
+
+    def test_the_main_view_reads_no_sellers_json(self, broker):
+        sources = self._sources(*broker, "main")
+        assert "sellers_json" not in sources
+
+    def test_the_vendor_view_reads_no_sellers_json_either(self, broker):
+        sources = self._sources(*broker, "lists_vendor")
+        assert "sellers_json" not in sources
+
+    def test_vendor_registries_do_not_feed_the_main_view(self, broker):
+        assert "vendors_json" not in self._sources(*broker, "main")
+
+    def test_no_upstream_party_reaches_the_graph(self, broker):
+        corpus, target, docs = broker
+        relations = expand_mod.relations_for_target(
+            corpus, target.id, docs, first_party=set(),
+            evidence_kind="main", site_kind="data_broker",
+        )
+        graph = SharingGraph()
+        add_target(graph, target.id, target.name, relations)
+        assert entity_node_id("Upstream One") not in graph.nodes
+        assert not [e for e in graph.edges.values()
+                    if e.dst == target_node_id(target.id)]

@@ -92,6 +92,8 @@ Accessible using `tpd-eval` or `python -m tpd_eval` as a CLI.
 | `tpd/probe.py` | Clean-profile traffic capture |
 | `tpd/traffic.py` | Third parties named by observed network requests |
 | `tpd/cmp.py` | Third parties named by a captured consent dialog |
+| `tpd/reconcile.py` | Check against sellers.json, tracker lists |
+| `tpd/corroboration.py` | Parties to keep in main findings graph |
 | `tpd/sharing_graph.py` | Cross-target graph of evidence-bearing propositions |
 | `tpd/expand.py` | Outward multi-hop collection from one seed origin |
 | `tpd/refresh.py` | Snapshot and change tracking across collections |

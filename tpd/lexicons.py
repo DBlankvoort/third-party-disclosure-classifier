@@ -207,6 +207,10 @@ ADS_TXT_ROW_RE = re.compile(
     r"^\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*,\s*[^,]+,\s*(DIRECT|RESELLER)\b",
     re.I | re.M,
 )
+ADS_TXT_ACCOUNT_RE = re.compile(
+    r"^\s*([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s*,\s*([^,]+?)\s*,\s*(DIRECT|RESELLER)\b",
+    re.I | re.M,
+)
 _JSON_DOMAIN_RE = re.compile(r'"domain"\s*:\s*"([^"]+)"', re.I)
 _JSON_NAME_RE = re.compile(r'"name"\s*:\s*"([^"]+)"', re.I)
 

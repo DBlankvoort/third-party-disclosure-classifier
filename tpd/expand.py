@@ -27,13 +27,22 @@ from .collect.runner import (
     fetch_target,
     render_thin_docs,
 )
+from .corroboration import prune_to_corroborated, pruning_summary
 from .entities import observed_domain_hints, resolve_entity_domain, resolve_name
 from .probe import cached_probe, merge_requests
+from .reconcile import (
+    RegistryStore,
+    confirm_tracker_domains,
+    reconcile_sellers,
+    reconciliation_summary,
+    tracker_summary,
+)
 from .sharing_graph import (
     NodeType,
     SharingGraph,
     add_target,
     expand_node,
+    target_node_id,
 )
 from .site_kind import kind_for, profile, store_target, supports
 from .traffic import observed_contacts
@@ -46,6 +55,12 @@ ANALYSIS_WORKERS = max(1, min(4, (os.cpu_count() or 2) // 2))
 CHUNK = 96
 
 RENDER_WORKERS = 2
+
+INVENTORY_KINDS = frozenset({"main", "authorises_inventory_sale"})
+
+RECONCILE_DEADLINE = 45.0
+
+TRAFFIC_KINDS = frozenset({"main", "contacts_domain"})
 
 ORIGIN_DEADLINE = 120.0
 PARTY_DEADLINE = 45.0
@@ -128,11 +143,10 @@ def relations_for_target(
         ])
     if evidence_kind in {"main", "discloses_relation_with"} and poligraph_available():
         lists.append(target_relations(corpus, target_id, docs, first_party=first_party))
-    if (evidence_kind in {"main", "lists_vendor"}
-            and supports(site_kind, "lists_vendor")):
+    if evidence_kind == "lists_vendor" and supports(site_kind, "lists_vendor"):
         lists.append(structured_relations_for_target(
             corpus, docs, first_party=first_party,
-            registry_kinds=frozenset({"sellers_json", "tcf_gvl", "vendors_json"}),
+            registry_kinds=frozenset({"tcf_gvl", "vendors_json"}),
         ))
     if (evidence_kind in {"main", "authorises_inventory_sale"}
             and supports(site_kind, "authorises_inventory_sale")):
@@ -179,7 +193,7 @@ def analyse_origin(
                              target_type=target.type, evidence_kind=evidence_kind,
                              site_kind=kind),
         cmp_relations(cmp, first_party=first_party)
-        if evidence_kind in {"main", "lists_vendor"} and supports(kind, "lists_vendor")
+        if evidence_kind == "lists_vendor" and supports(kind, "lists_vendor")
         else [],
     ])
     observed = (observed_contacts(requests, origin, first_party=first_party)
@@ -304,6 +318,8 @@ class Expansion:
         chunk: int = CHUNK,
         probe: bool | None = None,
         evidence_kind: str = "main",
+        lookups: int = 0,
+        corroborated_only: bool = False,
     ) -> None:
         self.corpus = Corpus(corpus_root)
         self.seed_url = seed_url
@@ -336,6 +352,12 @@ class Expansion:
         ) if probe is None else bool(probe)
         self.started = 0.0
         self.cmp = cmp or {}
+        self._reconciled: dict[tuple, dict] = {}
+        self._tracked: dict[tuple, dict] = {}
+        self.dropped: list[dict] = []
+        self.corroborated_only = bool(corroborated_only) and evidence_kind == "main"
+        self._store: RegistryStore | None = None
+        self.lookups = max(0, int(lookups))
         self.graph = SharingGraph()
         self.progress = Progress(hops=self.hops, time_limit=self.time_limit)
         self.unresolved: dict[str, str] = {}   # canonical key -> display name
@@ -386,6 +408,10 @@ class Expansion:
                 "graph": self.graph.to_dict(),
                 "progress": self.progress.to_dict(),
                 "unresolved": sorted(self.unresolved.values(), key=str.lower),
+                "reconciliation": reconciliation_summary(self.reconciliation),
+                "tracker_check": tracker_summary(self.tracker_check),
+                "corroborated_only": self.corroborated_only,
+                "pruned": pruning_summary(self.dropped),
             }
 
     # -- walk ----------------------------------------------------------- #
@@ -428,6 +454,7 @@ class Expansion:
                 target_type=seed_target.type, observed=observed, hop=0,
             )
         hints = observed_domain_hints(observed)
+        self._verify(hop=1)
 
         expanded: set[str] = {seed_id}
         frontier = self._parties(seed_id, hints)
@@ -437,6 +464,10 @@ class Expansion:
             frontier = self._ranked(frontier)
             self._set(hop=hop, parties_total=len(frontier), parties_done=0)
             frontier = self._expand_hop(frontier, hop, expanded, hints)
+            self._verify(hop=hop + 1)
+            frontier = [p for p in frontier if p.node_id in self.graph.nodes]
+
+        self._verify(hop=None)
 
         phase = "done"
         if self._timed_out:
@@ -445,6 +476,59 @@ class Expansion:
             phase = "stopped"
         self._set(phase=phase, current="", elapsed=self.elapsed)
         return self.graph
+
+    # -- cross-checks --------------------------------------------------- #
+    def _verify(self, hop: int | None) -> None:
+        """Verify a newly added ring, or run a final pass without pruning."""
+        if self.evidence_kind in TRAFFIC_KINDS:
+            self._confirm_trackers()
+        if self.evidence_kind in INVENTORY_KINDS:
+            self._reconcile()
+        if self.corroborated_only and hop is not None:
+            with self._lock:
+                self.dropped.extend(prune_to_corroborated(self.graph, hop))
+
+    @property
+    def reconciliation(self) -> list[dict]:
+        """Return all inventory arrangements checked during the crawl."""
+        return list(self._reconciled.values())
+
+    @property
+    def tracker_check(self) -> list[dict]:
+        """Return all observed contacts checked during the crawl."""
+        return list(self._tracked.values())
+
+    def _confirm_trackers(self) -> None:
+        """Mark observed contacts recognized by an independent tracker list."""
+        try:
+            with self._lock:
+                for row in confirm_tracker_domains(self.graph):
+                    self._tracked[(row["src"], row["dst"])] = row
+        except Exception as exc:  # noqa: BLE001
+            self._set(error=self.progress.error or f"tracker list: {exc}")
+
+    def _reconcile(self) -> None:
+        """Check graph edges against each receiving party's sellers.json."""
+        self._set(phase="verifying", current="")
+        if self._store is None:
+            self._store = RegistryStore(self.corpus)
+        else:
+            self._store.forget_missing()
+        seed_host = urlparse(self.origin).netloc.removeprefix("www.")
+        try:
+            with deadline(RECONCILE_DEADLINE):
+                report = reconcile_sellers(
+                    self.graph, self.corpus,
+                    domains={target_node_id(self.target.id): seed_host},
+                    overrides=self.overrides,
+                    store=self._store,
+                    lookups=self.lookups,
+                )
+            with self._lock:
+                for row in report:
+                    self._reconciled[(row["kind"], row["src"], row["dst"])] = row
+        except Exception as exc:  # noqa: BLE001
+            self._set(error=self.progress.error or f"reconcile: {exc}")
 
     def _expand_hop(
         self, parties: list[_Party], hop: int, expanded: set[str],

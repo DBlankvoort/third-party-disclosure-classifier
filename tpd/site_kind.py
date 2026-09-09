@@ -144,7 +144,7 @@ def views_for(kind: str) -> list[str]:
 
 
 def graph_views_for(kind: str) -> list[str]:
-    views = views_for(kind)
+    views = [view for view in views_for(kind) if view != VENDOR_VIEW]
     return views if len(views) < 2 else [MAIN_VIEW, *views]
 
 

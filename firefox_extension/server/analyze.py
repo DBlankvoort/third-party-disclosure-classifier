@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import sys
 import threading
 from pathlib import Path
+from urllib.parse import urlparse
 
 from tpd.classify.named_entities import first_party_tokens
 from tpd.classify.named_relations import named_org_relations
@@ -24,6 +26,12 @@ from tpd.collect.runner import fetch_target
 from tpd.expand import first_party_urls, origin_of, target_for_url
 from tpd.extract import parse_html
 from tpd.probe import merge_requests
+from tpd.reconcile import (
+    DEFAULT_LOOKUPS,
+    corroborate_relations,
+    corroboration_summary,
+    tracker_listing,
+)
 from tpd.site_kind import profile, supports
 from tpd.traffic import observed_contacts, observed_hosts
 from tpd.typology import media_of
@@ -112,6 +120,7 @@ def _empty(origin: str, target_id: str, cached: bool,
         "probe": {"ran": False, "cached": False, "accepted": "", "available": False},
         "undisclosed_parties": [],
         "cmp_parties": [],
+        "corroboration": {"checked": 0, "counts": {}},
     }
 
 
@@ -162,6 +171,7 @@ def analyze_url(
     requests: list[dict] | None = None,
     cmp: dict | None = None,
     probe: bool = True,
+    corroborate: int = DEFAULT_LOOKUPS,
 ) -> dict:
     """Collect + classify the origin of a URL."""
     origin = origin_of(url)
@@ -241,6 +251,12 @@ def analyze_url(
         requests = merge_requests(requests, probing.requests)
     contacts = (observed_contacts(requests, origin, first_party=first_party)
                 if traffic_on else [])
+    # Add independent tracker-list classifications to observed contacts.
+    for contact in contacts:
+        status, basis, categories = tracker_listing(contact.get("domain") or "")
+        contact["tracker"] = status
+        contact["tracker_basis"] = basis
+        contact["tracker_categories"] = categories
     observed = (observed_hosts(requests, origin, first_party=first_party)
                 if traffic_on else [])
     # A vendor registry read off a publisher's origin names the registry rather
@@ -255,6 +271,20 @@ def analyze_url(
     sharing = merge_relations(
         [prose_rels, structured_rels, named_rels, cmp_rels]
     )
+    # Check ads.txt authorisations against each ad system's sellers.json.
+    corroboration = {"checked": 0, "counts": {}}
+    if supports(site_kind, "authorises_inventory_sale"):
+        try:
+            checked = corroborate_relations(
+                sharing, corpus,
+                site_domain=urlparse(origin).hostname or "",
+                site_name=target.name,
+                lookups=corroborate, delay=delay,
+            )
+            corroboration = corroboration_summary(checked)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[analyze] corroboration skipped: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr)
 
     # Per-document view.
     documents = [
@@ -299,4 +329,5 @@ def analyze_url(
         "probe": probe_info,
         "undisclosed_parties": _undisclosed(observed, named, sharing),
         "cmp_parties": cmp_parties,
+        "corroboration": corroboration,
     }

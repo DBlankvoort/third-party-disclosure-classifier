@@ -23,12 +23,12 @@ const META = {
     title: "Ad-tech authorisations", colour: "#996f28",
     proposition: "authorises_inventory_sale",
     meaning: "A publisher advertising record authorises an advertising-system account to sell or resell inventory.",
-    scope: "Authorisations use the registry's own direct or reseller relationship and do not establish personal-data transmission.",
+    scope: "Authorisations use the registry's own direct or reseller relationship and do not establish personal-data transmission. Each one is checked against the ad system's own sellers.json, which either names this site as a seller or does not: an entry may be withheld as confidential, so silence is not a denial.",
   },
   contacts_domain: {
     title: "Web traffic", colour: "#27786d", proposition: "contacts_domain",
     meaning: "The browser contacted the recorded domain during the bounded observation session and consent state.",
-    scope: "Request metadata describes contact. It does not establish payload, purpose, legal role, or lawful basis.",
+    scope: "Request metadata describes contact. It does not establish payload, purpose, legal role, or lawful basis. Each domain is checked against an independent tracker list, which says what the domain is known to do, never what this request carried.",
   },
 };
 const PROSE = new Set(["policy", "cookie_table", "vendor_table"]);
@@ -68,7 +68,21 @@ function uniqueRelations(relations) {
     seen.add(key); return true;
   });
 }
-function badge(text) { const span = document.createElement("span"); span.className = "badge"; span.textContent = text; return span; }
+function badge(text, cls) { const span = document.createElement("span"); span.className = cls ? `badge ${cls}` : "badge"; span.textContent = text; return span; }
+
+const CORROBORATION = {
+  confirmed: ["sellers.json confirms", "confirmed"],
+  absent: ["not named in sellers.json", "unconfirmed"],
+  confidential_only: ["sellers.json withholds every seller", "unconfirmed"],
+  no_sellers_json: ["no sellers.json published", "unconfirmed"],
+  not_collected: ["sellers.json not read", "unconfirmed"],
+};
+
+const TRACKER = {
+  confirmed: ["recognised as a tracker", "confirmed"],
+  known_not_tracking: ["listed, but not as a tracker", "unconfirmed"],
+  unlisted: ["on no tracker list we hold", "unconfirmed"],
+};
 
 function recordCard(relation) {
   const card = document.createElement("article"); card.className = "record";
@@ -77,11 +91,15 @@ function recordCard(relation) {
   title.textContent = relation.entity; const badges = document.createElement("div"); badges.className = "badges";
   for (const value of [...sources(relation), relation.negative ? "negative" : "positive"])
     badges.append(badge(value.replaceAll("_", " ")));
+  const corroboration = CORROBORATION[relation.corroboration];
+  if (corroboration) badges.append(badge(corroboration[0], corroboration[1]));
   left.append(title, badges); head.append(left); card.append(head);
   const dl = document.createElement("dl");
   for (const [label, value] of [
     ["Data category", relation.data_type], ["Purpose", (relation.purposes || []).join(", ")],
     ["Relationship", relation.qualifier], ["Subject", relation.subject],
+    ["Account", relation.seller_id], ["Listed as", relation.seller_type],
+    ["Confirmed by", relation.corroborated_by],
   ]) {
     if (!value) continue;
     const dt = document.createElement("dt"); dt.textContent = label;
@@ -99,12 +117,21 @@ function trafficCard(party) {
   badges.append(badge(`${party.requests || 0} requests`),
     badge(party.entity ? `attributed to ${party.entity}` : "organisation not attributed"),
     badge(party.consent || "consent state unknown"));
+  const listing = TRACKER[party.tracker];
+  if (listing) badges.append(badge(listing[0], listing[1]));
   card.append(title, badges);
   const dl = document.createElement("dl");
   const dt = document.createElement("dt"); dt.textContent = "Resolution basis";
   const dd = document.createElement("dd"); dd.textContent = party.entity
     ? party.basis.replaceAll("_", " ") : "none";
-  dl.append(dt, dd); card.append(dl); return card;
+  dl.append(dt, dd);
+  if ((party.tracker_categories || []).length) {
+    const ct = document.createElement("dt"); ct.textContent = "Listed as";
+    const cd = document.createElement("dd");
+    cd.textContent = party.tracker_categories.join(", ");
+    dl.append(ct, cd);
+  }
+  card.append(dl); return card;
 }
 
 function renderSources(documents) {
@@ -137,7 +164,9 @@ function render(data) {
   const claims = {
     discloses_relation_with: `${records.length} organisations named in disclosed relations`,
     lists_vendor: `${records.length} organisations listed in vendor records`,
-    authorises_inventory_sale: `${records.length} organisations authorised to sell inventory`,
+    authorises_inventory_sale: `${records.length} organisations authorised to sell inventory`
+      + (((data.corroboration || {}).counts || {}).confirmed
+        ? `, ${data.corroboration.counts.confirmed} confirmed by the ad system's own record` : ""),
     contacts_domain: `${records.length} domains contacted during this observation`,
   };
   $("claim").textContent = claims[kind];

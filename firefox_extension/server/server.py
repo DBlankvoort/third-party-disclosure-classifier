@@ -27,6 +27,7 @@ CONFIG = {
     "probe": True,
     "allowed_origin": "",
     "entity_domains": "",
+    "corroborate": 25,
 }
 
 
@@ -53,7 +54,8 @@ def _entity_overrides() -> dict:
 
 def start_expansion(url: str, hops: int, requests: list, force: bool,
                     cmp: dict | None = None, time_limit: float = 0.0,
-                    evidence_kind: str = "main") -> str:
+                    evidence_kind: str = "main",
+                    corroborated_only: bool = False) -> str:
     from tpd.expand import Expansion
 
     expansion = Expansion(
@@ -61,6 +63,7 @@ def start_expansion(url: str, hops: int, requests: list, force: bool,
         delay=CONFIG["delay"], overrides=_entity_overrides(), cmp=cmp,
         time_limit=time_limit, evidence_kind=evidence_kind,
         probe=None if CONFIG["probe"] else False,
+        lookups=CONFIG["corroborate"], corroborated_only=corroborated_only,
     )
     job_id = uuid.uuid4().hex[:12]
 
@@ -72,7 +75,7 @@ def start_expansion(url: str, hops: int, requests: list, force: bool,
 
     thread = threading.Thread(target=run, name=f"expand-{job_id}", daemon=True)
     with _JOBS_LOCK:
-        # Walks left running by a closed tab would otherwise keep crawling.
+        # Discard completed jobs and stop the oldest job at the capacity limit.
         for old_id, old in list(_JOBS.items()):
             if not old["thread"].is_alive():
                 del _JOBS[old_id]
@@ -235,7 +238,9 @@ class Handler(BaseHTTPRequestHandler):
                 job_id = start_expansion(url, hops, payload.get("requests") or [],
                                          force, payload.get("cmp"),
                                          time_limit=time_limit,
-                                         evidence_kind=payload.get("evidence_kind") or "main")
+                                         evidence_kind=payload.get("evidence_kind") or "main",
+                                         corroborated_only=bool(
+                                             payload.get("corroborated_only")))
             except ValueError as exc:
                 self._json(400, {"error": str(exc)})
                 return
@@ -259,6 +264,7 @@ class Handler(BaseHTTPRequestHandler):
                 requests=requests,
                 cmp=cmp,
                 probe=CONFIG["probe"],
+                corroborate=CONFIG["corroborate"],
             )
             self._json(200, result)
         except ValueError as exc:
@@ -325,6 +331,11 @@ def main() -> None:
                          "otherwise share")
     ap.add_argument("--delay", type=float, default=CONFIG["delay"],
                     help="polite per-request delay (s)")
+    ap.add_argument("--corroborate", type=int, default=CONFIG["corroborate"],
+                    metavar="N",
+                    help="ad systems whose sellers.json may be read to check "
+                         "this site's inventory authorisations (0 to read only "
+                         "what the corpus already holds)")
     ap.add_argument("--entity-domains", default="",
                     help="hand-filled entity_resolution.csv supplying "
                          "organisation domains for graph expansion")
@@ -336,6 +347,7 @@ def main() -> None:
     CONFIG["delay"] = args.delay
     CONFIG["probe"] = not args.no_probe
     CONFIG["entity_domains"] = args.entity_domains
+    CONFIG["corroborate"] = max(0, args.corroborate)
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"tpd extension bridge on http://{args.host}:{args.port}  "

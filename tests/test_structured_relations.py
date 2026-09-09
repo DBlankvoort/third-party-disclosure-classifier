@@ -159,10 +159,41 @@ class TestSellersJson:
         assert [r["entity"] for r in rels] == ["open ads"]
         assert rels[0]["action"] == "collect"
 
+    def test_the_entry_keeps_the_account_and_site_it_names(self):
+        raw = json.dumps({"sellers": [
+            {"seller_id": "pub-1", "name": "Open Ads",
+             "domain": "www.openads.example", "seller_type": "PUBLISHER"},
+        ]})
+        (rel,) = registry_relations(raw, kinds=ALL_REGISTRY_KINDS)
+        assert rel["seller_id"] == "pub-1"
+        assert rel["seller_domain"] == "openads.example"
+        assert rel["qualifier"] == "publisher"
+
+    def test_an_entry_naming_neither_leaves_both_out(self):
+        raw = json.dumps({"sellers": [{"seller_id": "", "name": "Open Ads"}]})
+        (rel,) = registry_relations(raw, kinds=ALL_REGISTRY_KINDS)
+        assert "seller_id" not in rel and "seller_domain" not in rel
+
     def test_sellers_are_upstream_suppliers(self):
         raw = json.dumps({"sellers": [{"seller_id": "1", "name": "Open Ads"}]})
         (rel,) = registry_relations(raw, kinds=ALL_REGISTRY_KINDS)
         assert rel["direction"] == "upstream"
+
+    def test_an_ads_txt_row_keeps_the_account_it_declares(self):
+        rels = registry_relations(
+            "google.com, pub-0000000000000000, DIRECT, f08c47fec0942fa0\n")
+        assert rels[0]["publisher_ids"] == ["pub-0000000000000000"]
+
+    def test_several_accounts_with_one_ad_system_are_all_kept(self):
+        rels = registry_relations(
+            "google.com, pub-1, DIRECT\ngoogle.com, pub-2, RESELLER\n")
+        assert rels[0]["publisher_ids"] == ["pub-1", "pub-2"]
+        assert rels[0]["authorizations"] == [
+            {"seller_id": "pub-1", "relationship": "direct"},
+            {"seller_id": "pub-2", "relationship": "reseller"},
+        ]
+        # A direct authorisation still outranks a resold one.
+        assert rels[0]["qualifier"] == "direct"
 
     def test_ads_txt_entries_stay_downstream(self):
         rels = registry_relations(self.ADS_TXT)

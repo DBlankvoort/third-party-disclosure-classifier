@@ -16,7 +16,11 @@ from ..extract import (
     cell_parties,
     table_cell_grid,
 )
-from ..lexicons import ADS_TXT_ROW_RE, MACHINE_READABLE_ROLES, machine_readable_kind
+from ..lexicons import (
+    ADS_TXT_ACCOUNT_RE,
+    MACHINE_READABLE_ROLES,
+    machine_readable_kind,
+)
 from ..poligraph.purpose import match_purpose_tags
 from ..tracks import (
     NOT_APPLICABLE,
@@ -95,17 +99,27 @@ def _relation(
 def _ads_txt_relations(raw: str, doc_id: str) -> list[dict]:
     """One edge per ads.txt / app-ads.txt row."""
     out: dict[str, dict] = {}
-    for m in ADS_TXT_ROW_RE.finditer(raw or ""):
-        domain, kind = m.group(1).lower(), m.group(2).lower()
+    for m in ADS_TXT_ACCOUNT_RE.finditer(raw or ""):
+        domain, account, kind = m.group(1).lower(), m.group(2), m.group(3).lower()
         if domain in out:
             if kind == "direct":
                 out[domain]["qualifier"] = "direct"
+            if account not in out[domain]["publisher_ids"]:
+                out[domain]["publisher_ids"].append(account)
+                out[domain]["authorizations"].append({
+                    "seller_id": account, "relationship": kind,
+                })
             continue
-        out[domain] = _relation(
+        rel = _relation(
             domain, "advertising bid data", "be_sold",
             source="ads_txt", purposes=["advertising"], qualifier=kind,
             text=m.group(0).strip(), doc_id=doc_id, subject=NOT_APPLICABLE,
         )
+        rel["publisher_ids"] = [account]
+        rel["authorizations"] = [{
+            "seller_id": account, "relationship": kind,
+        }]
+        out[domain] = rel
     return list(out.values())
 
 
@@ -124,13 +138,20 @@ def _sellers_json_relations(raw: str, doc_id: str) -> list[dict]:
         if not name:
             continue
         stype = str(s.get("seller_type") or "").lower()
-        out.append(_relation(
+        seller_id = str(s.get("seller_id") or "").strip()
+        domain = str(s.get("domain") or "").strip().lower().removeprefix("www.")
+        rel = _relation(
             name, "advertising bid data", "collect",
             source="sellers_json", purposes=["advertising"],
             qualifier=stype,
-            text=f"seller_id={s.get('seller_id', '')} seller_type={stype or '?'}",
+            text=f"seller_id={seller_id} seller_type={stype or '?'}",
             doc_id=doc_id, direction=UPSTREAM, subject=NOT_APPLICABLE,
-        ))
+        )
+        if seller_id:
+            rel["seller_id"] = seller_id
+        if domain:
+            rel["seller_domain"] = domain
+        out.append(rel)
     return out
 
 

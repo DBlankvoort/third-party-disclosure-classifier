@@ -58,6 +58,8 @@ class EvidenceType(str, Enum):
     STRUCTURED_TABLE_RELATION = "structured_table_relation"
     ADS_TXT_AUTHORISATION = "ads_txt_authorisation"
     SELLERS_JSON_PARTICIPATION = "sellers_json_participation"
+    SELLERS_JSON_CONFIRMATION = "sellers_json_confirmation"
+    TRACKER_LIST_CONFIRMATION = "tracker_list_confirmation"
     TCF_VENDOR_REGISTRATION = "tcf_vendor_registration"
     CMP_VENDOR_LISTING = "cmp_vendor_listing"
     NETWORK_CONTACT = "network_contact"
@@ -69,6 +71,8 @@ class EvidenceType(str, Enum):
 
 GENERIC_PREFIX = "generic::"
 TARGET_PREFIX = "target::"
+ENTITY_PREFIX = "entity::"
+DOMAIN_PREFIX = "domain::"
 
 
 def generic_node_id(category: str) -> str:
@@ -76,7 +80,7 @@ def generic_node_id(category: str) -> str:
 
 
 def entity_node_id(name: str) -> str:
-    return f"entity::{resolve_name(name).key or name.strip().lower()}"
+    return f"{ENTITY_PREFIX}{resolve_name(name).key or name.strip().lower()}"
 
 
 def entity_node(name: str, hop: int = 0, grounded: bool | None = None,
@@ -85,7 +89,7 @@ def entity_node(name: str, hop: int = 0, grounded: bool | None = None,
     resolved = resolve_name(name)
     surface = name.strip()
     node = Node(
-        id=f"entity::{resolved.key or surface.lower()}",
+        id=f"{ENTITY_PREFIX}{resolved.key or surface.lower()}",
         type=NodeType.ENTITY,
         display_name=resolved.display or surface,
         resolution_basis=resolved.basis,
@@ -107,7 +111,7 @@ def entity_node(name: str, hop: int = 0, grounded: bool | None = None,
 
 
 def domain_node_id(domain: str) -> str:
-    return f"domain::{domain.strip().lower()}"
+    return f"{DOMAIN_PREFIX}{domain.strip().lower()}"
 
 
 def target_node_id(target_id: str) -> str:
@@ -178,6 +182,13 @@ class Evidence:
     confidence: float = 0.0
     # For observed traffic, the consent state the contact was made under.
     consent: str = ""
+    # Relationship and account identifiers retained from registry records.
+    qualifier: str = ""
+    publisher_ids: list[str] = field(default_factory=list)
+    authorizations: list[dict] = field(default_factory=list)
+    # How a corroborating record matched and whether its role is consistent.
+    match_basis: str = ""
+    relationship_valid: bool | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -202,7 +213,10 @@ _LEGACY_EDGE_KINDS = {
 
 
 def _kind_for_evidence(evidence_type: EvidenceType | None) -> EdgeKind:
-    if evidence_type is EvidenceType.ADS_TXT_AUTHORISATION:
+    if evidence_type in {
+        EvidenceType.ADS_TXT_AUTHORISATION,
+        EvidenceType.SELLERS_JSON_CONFIRMATION,
+    }:
         return EdgeKind.AUTHORISES_INVENTORY_SALE
     if evidence_type in {
         EvidenceType.SELLERS_JSON_PARTICIPATION,
@@ -212,6 +226,7 @@ def _kind_for_evidence(evidence_type: EvidenceType | None) -> EdgeKind:
         return EdgeKind.LISTS_VENDOR
     if evidence_type in {
         EvidenceType.NETWORK_CONTACT, EvidenceType.OBSERVED_TRANSMISSION,
+        EvidenceType.TRACKER_LIST_CONFIRMATION,
     }:
         return EdgeKind.CONTACTS_DOMAIN
     if evidence_type in {
@@ -892,6 +907,9 @@ def attach(
             subject=rel.get("subject") or UNKNOWN,
             confidence=float(rel.get("confidence") or 0.0),
             consent=rel.get("consent") or "",
+            qualifier=rel.get("qualifier") or "",
+            publisher_ids=[str(v) for v in rel.get("publisher_ids") or ()],
+            authorizations=[dict(v) for v in rel.get("authorizations") or ()],
         )
         kind = _kind_for_evidence(ev.evidence_type)
         if rel.get("direction") == "upstream":

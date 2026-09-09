@@ -9,13 +9,13 @@
       <label>Depth <input id="hops" type="number" min="1" value="1" /></label>
       <label>Minutes <input id="time-limit" type="number" min="0" value="0" /></label>
       <button id="run" class="primary">Collect evidence</button><button id="stop" hidden>Stop</button>
+      <label id="rule-box" hidden title="Hide paths whose corresponding relationship is not disclosed in prose."><input id="f-rule" type="checkbox" /> Require prose throughout</label>
       <button id="edit-toggle">Edit graph</button>
     </div>
   </header>
   <nav id="kind-nav" aria-label="Proposition views">
     <button data-kind="main">Main findings</button>
     <button data-kind="discloses_relation_with">Prose disclosures</button>
-    <button data-kind="lists_vendor">Vendor listings</button>
     <button data-kind="authorises_inventory_sale">Ad-tech authorisations</button>
     <button data-kind="contacts_domain">Web traffic</button>
   </nav>
@@ -25,10 +25,11 @@
       <canvas id="canvas"></canvas><div id="tooltip" class="tooltip" hidden></div>
       <div id="empty" class="empty-state"><strong>No evidence network collected yet</strong><span>Choose a depth and collect evidence from this source.</span></div>
       <div id="legend" class="legend"></div>
-      <div class="canvas-tools"><button id="fit-view">Fit</button><label><input id="show-labels" type="checkbox" /> All labels</label><label><input id="f-generic" type="checkbox" checked /> Generic categories</label><label><input id="f-domains" type="checkbox" checked /> Domains</label><label><input id="f-ungrounded" type="checkbox" checked /> Unverified organisation names</label></div>
+      <div class="canvas-tools"><button id="fit-view">Fit</button><label><input id="show-labels" type="checkbox" /> All labels</label><label><input id="f-generic" type="checkbox" checked /> Generic categories</label><label><input id="f-domains" type="checkbox" checked /> Domains</label><label><input id="f-ungrounded" type="checkbox" checked /> Unverified organisation names</label><label id="f-corroborated-box" hidden><input id="f-corroborated" type="checkbox" checked /> <span id="f-corroborated-label">Only corroborated</span></label></div>
     </section>
     <aside class="panel">
       <section class="stats"><div><strong id="stat-recipients">0</strong><span id="stat-parties-label">organisations shown</span></div><div><strong id="stat-edges">0</strong><span id="stat-edges-label">propositions shown</span></div><div><strong id="stat-crawled">0</strong><span>sites analysed</span></div></section>
+      <section id="verify" class="detail" hidden><h2>Cross-checks</h2><p id="verify-summary" class="empty"></p><div id="verify-rows"></div></section>
       <section id="edit-box" class="detail edit" hidden><h2>Editing</h2><div id="edit-actions"></div><p id="edit-status" class="empty"></p></section>
       <section id="detail" class="detail"><h2>Evidence inspector</h2><p class="empty">Select a node to inspect its propositions and evidence records.</p></section>
     </aside>
