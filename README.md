@@ -72,6 +72,11 @@ Navigate to the root directory, then
 
 to start the server. Afterwards, navigate to `about:debugging` -> 'This Firefox' -> 'Load Temporary Add-on' -> Select `firefox_extension/extension/manifest.json` to load the extension for the session.
 
+#### Windows without Python
+The `Build Windows server` GitHub Actions workflow (run it from the Actions tab, or push a `v*` tag) produces `tpd-server-windows.zip`, a standalone build of the server. Unzip it anywhere and run `tpd-server\tpd-server.exe`, keep its window open while using the extension, then load the extension as above. Results are cached in `%LOCALAPPDATA%\TPDLens`. Windows may show a SmartScreen warning for the unsigned executable ('More info' -> 'Run anyway').
+
+The standalone build leaves out Playwright, so it skips the clean-profile probe and JavaScript rendering of policy pages; the extension's own observed requests are still used. To build it locally (on the target OS), run `pip install pyinstaller && pyinstaller firefox_extension/server/tpd-server.spec`.
+
 ### `tpd` package
 Accessible using `tpd` or `python -m tpd` as a CLI. See `tpd/cli.py` for arguments.
 

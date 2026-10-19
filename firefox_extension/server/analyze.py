@@ -346,7 +346,6 @@ def analyze_url(
                 "one clean browser profile",
                 "one short page-load observation",
                 "reject-all is measured only when directly exposed and recognised",
-                "request destinations only; no payload inspection",
             ],
             "documents_failed": len(failed),
             "documents_fetched": fetched,

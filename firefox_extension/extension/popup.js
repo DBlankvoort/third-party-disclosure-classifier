@@ -167,10 +167,6 @@ function render(data) {
   $("traffic-count").textContent = domains.size;
   const coverage = data.coverage || {};
   const limitations = coverage.probe_limitations || [];
-  $("coverage-note").textContent = limitations.length
-    ? `Coverage: ${limitations.join("; ")}. Counts are observations, not totals.`
-    : "Counts reflect collected evidence and are not ecosystem totals.";
-
   const proseRoles = roles(data.documents, new Set([
     "privacy_policy", "cookie_policy", "dpa", "subprocessor_list", "partners_page",
   ]));

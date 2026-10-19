@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
+import os
 import sys
 import threading
 import traceback
@@ -18,9 +20,18 @@ sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_HERE))
 from analyze import analyze_url  # noqa: E402
 
+
+def _default_corpus_root() -> str:
+    # A frozen build lives in a read-only install dir, so cache per user.
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".cache")
+        return str(Path(base) / "TPDLens" / "_cache_corpus")
+    return str(_HERE.parent / "_cache_corpus")
+
+
 # Defaults
 CONFIG = {
-    "corpus_root": str(_HERE.parent / "_cache_corpus"),
+    "corpus_root": _default_corpus_root(),
     "use_ner": True,
     "use_poligraph": True,
     "delay": 0.2,
@@ -384,4 +395,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # spawned analysis workers in a frozen build
     main()

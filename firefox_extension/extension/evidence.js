@@ -11,24 +11,20 @@ const META = {
   discloses_relation_with: {
     title: "Prose disclosures", colour: "#526d82",
     proposition: "discloses_relation_with",
-    meaning: "An analysed textual source attributed to a party asserts a relation involving the named organisation.",
-    scope: "Privacy policies, cookie policies, data-processing documents, and structured disclosure tables are presented with their supporting text and fields.",
+    scope: "",
   },
   lists_vendor: {
     title: "Vendor listings", colour: "#755c7f", proposition: "lists_vendor",
-    meaning: "A captured consent interface or vendor record lists the named organisation and any purposes exposed by that source.",
-    scope: "Consent interfaces and machine-readable vendor records are retained as distinct evidence records.",
+    scope: "",
   },
   authorises_inventory_sale: {
     title: "Ad-tech authorisations", colour: "#996f28",
     proposition: "authorises_inventory_sale",
-    meaning: "A publisher advertising record authorises an advertising-system account to sell or resell inventory.",
-    scope: "Authorisations use the registry's own direct or reseller relationship and do not establish personal-data transmission. Each one is checked against the ad system's own sellers.json, which either names this site as a seller or does not: an entry may be withheld as confidential, so silence is not a denial.",
+    scope: "",
   },
   contacts_domain: {
     title: "Web traffic", colour: "#27786d", proposition: "contacts_domain",
-    meaning: "A bounded browser session sent one or more requests to the recorded domain.",
-    scope: "This proves destination contact only. Request values and bodies are deliberately not retained, so it does not establish that personal data was transmitted, nor payload, purpose, legal role, or lawful basis. Tracker-list status describes a domain generally, never this request.",
+    scope: "",
   },
 };
 const PROSE = new Set(["policy", "cookie_table", "vendor_table"]);
@@ -164,7 +160,6 @@ function render(data) {
     && ["play_store_app", "app_store_app"].includes(data.site_kind))
     ? data.target_name : data.origin;
   $("proposition").textContent = meta.proposition;
-  $("scope").textContent = meta.scope; $("meaning").textContent = meta.meaning;
   const records = kind === "contacts_domain"
     ? data.traffic_contacts || [] : uniqueRelations(data.sharing_relations || []);
   const claims = {
@@ -172,7 +167,7 @@ function render(data) {
     lists_vendor: `${records.length} organisations listed in vendor records`,
     authorises_inventory_sale: `${records.length} organisations authorised to sell inventory`
       + (((data.corroboration || {}).counts || {}).confirmed
-        ? `, ${data.corroboration.counts.confirmed} confirmed by the ad system's own record` : ""),
+        ? `, ${data.corroboration.counts.confirmed} confirmed` : ""),
     contacts_domain: `${records.length} domains contacted during this observation`,
   };
   $("claim").textContent = claims[kind];

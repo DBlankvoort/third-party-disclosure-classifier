@@ -1,0 +1,23 @@
+{
+  "_comment": "Brands and products an organisation operates itself. A policy naming them names the first party, not a recipient. 'brands' are distinctive tokens matched inside a name; 'products' are matched as whole names only, since many are ordinary words.",
+  "google": {
+    "brands": ["alphabet", "youtube", "gmail", "android", "chrome", "chromebook", "fitbit", "blogger", "waze", "doubleclick", "adsense", "admob", "firebase", "gemini"],
+    "products": ["drive", "photos", "nest", "pixel", "pixel watch", "maps", "search", "meet", "chat", "duo", "voice", "assistant", "play", "fi", "fiber", "translate", "calendar", "docs", "sheets", "sites", "workspace", "lens", "family link", "security checkup", "privacy checkup", "incognito", "my activity", "my ad center", "timeline", "read along"]
+  },
+  "meta": {
+    "brands": ["facebook", "instagram", "whatsapp", "messenger", "oculus"],
+    "products": ["threads", "quest", "audience network"]
+  },
+  "microsoft": {
+    "brands": ["linkedin", "bing", "xbox", "skype", "github", "outlook", "azure"],
+    "products": ["teams", "office", "windows", "edge", "copilot"]
+  },
+  "amazon": {
+    "brands": ["alexa", "audible", "twitch", "imdb", "zappos", "kindle", "aws"],
+    "products": ["ring", "whole foods", "prime video", "fire tv"]
+  },
+  "apple": {
+    "brands": ["icloud", "itunes", "siri"],
+    "products": ["app store", "apple pay", "apple tv"]
+  }
+}

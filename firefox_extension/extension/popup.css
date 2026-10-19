@@ -1,4 +1,4 @@
-:root { --paper:#fbfbf8;--ink:#161918;--muted:#626965;--line:#c9ceca;--soft:#f0f2ef;--mint:#d5f5ed;--mint-strong:#156b5b;--prose:#526d82;--vendors:#755c7f;--adtech:#996f28;--traffic:#27786d;--font:"Aptos","Segoe UI",system-ui,sans-serif;--display:Georgia,"Times New Roman",serif; }
+:root { --paper:#ffffff;--ink:#161918;--muted:#626965;--line:#c9ceca;--soft:#f0f2ef;--mint:#d5f5ed;--mint-strong:#156b5b;--prose:#526d82;--vendors:#755c7f;--adtech:#996f28;--traffic:#27786d;--font:"Aptos","Segoe UI",system-ui,sans-serif;--display:Georgia,"Times New Roman",serif; }
 * { box-sizing:border-box; }
 body { width:740px;margin:0;color:var(--ink);background:var(--paper);font:14px/1.35 var(--font); }
 button,a { font:inherit;color:inherit; }
