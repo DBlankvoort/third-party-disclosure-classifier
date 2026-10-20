@@ -32,8 +32,12 @@ jobs:
               try { Invoke-WebRequest "http://127.0.0.1:8765/site?url=https://example.com" -UseBasicParsing | Out-Null; break }
               catch { Start-Sleep -Seconds 1 }
             }
-            $r = Invoke-RestMethod "http://127.0.0.1:8765/analyze?url=https://example.com" -TimeoutSec 300
-            if (-not $r.origin) { throw "analyze returned no origin" }
+            # A site with a real privacy policy, so classification and PoliGraph run.
+            $r = Invoke-RestMethod "http://127.0.0.1:8765/analyze?url=https://www.bbc.com" -TimeoutSec 300
+            if ($r.error) { throw "analyze failed: $($r.error)" }
+            if (-not $r.poligraph) { throw "PoliGraph did not run" }
+            if ($r.sharing_relations.Count -eq 0) { throw "no sharing relations extracted" }
+            Write-Host "relations: $($r.sharing_relations.Count)"
           } finally {
             Stop-Process -Id $server.Id -Force
           }

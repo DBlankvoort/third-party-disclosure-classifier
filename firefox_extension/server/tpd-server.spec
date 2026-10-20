@@ -25,7 +25,14 @@ for pkg in (
     binaries += b
     hiddenimports += h
 
-datas += collect_data_files("tpd")
+# Take tpd's data straight from the source tree: collect_data_files("tpd")
+# finds nothing unless tpd is installed in the build environment.
+datas += [
+    (str(path), str(path.parent.relative_to(repo_root)))
+    for path in (repo_root / "tpd").rglob("*.json")
+]
+# Only ever named in importlib.resources.files(), so analysis cannot see it.
+hiddenimports += ["tpd.poligraph.data"]
 
 a = Analysis(
     [str(server_dir / "server.py")],
